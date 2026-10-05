@@ -5,45 +5,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import socket
-import threading
-import time
 
 import httpx
-import pytest
-import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from conftest import TOKEN, TOKEN2, FakeRunner
 from review_platform.adapters.llm import FakeLLM
 from review_platform.adapters.notify import NoNotifier
-from review_platform.api import create_app
 from review_platform.worker import Worker
-
-
-def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-@pytest.fixture
-def server(settings, svc):
-    port = _free_port()
-    cfg = uvicorn.Config(create_app(settings, svc), host="127.0.0.1", port=port, log_level="warning", lifespan="on")
-    srv = uvicorn.Server(cfg)
-    t = threading.Thread(target=srv.run, daemon=True)
-    t.start()
-    for _ in range(100):
-        try:
-            if httpx.get(f"http://127.0.0.1:{port}/healthz").status_code == 200:
-                break
-        except httpx.HTTPError:
-            time.sleep(0.05)
-    yield f"http://127.0.0.1:{port}"
-    srv.should_exit = True
-    t.join(timeout=5)
 
 
 async def _session(url: str, token: str, fn):
