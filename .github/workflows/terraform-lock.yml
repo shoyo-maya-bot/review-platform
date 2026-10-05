@@ -31,7 +31,10 @@ jobs:
           terraform_version: "1.9.8"
       - name: lock を作る
         run: |
+          # 古い lock があると、版の範囲を上げたとき「locked provider ... does not match」で失敗する.
+          # 範囲の中で最新の版を選び直すため、いったん消してから作る.
           for d in infra/aws infra/azure; do
+            rm -f "$d/.terraform.lock.hcl"
             terraform -chdir="$d" providers lock \
               -platform=linux_amd64 -platform=linux_arm64 \
               -platform=windows_amd64 -platform=darwin_amd64 -platform=darwin_arm64
