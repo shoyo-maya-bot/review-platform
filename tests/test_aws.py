@@ -35,9 +35,9 @@ def test_sqs():
     q = SqsQueue(url, REGION)
     queue_contract(q)
     q.send("20260101000000000000-0123456789abcdef")
-    m = q.receive(1, 1, 30)[0]
+    m = q.receive(1, 5, 30)[0]
     q.dead_letter(m)  # すぐ見えるようにして受信回数を進める（DLQ への移動は SQS の redrive が行う）
-    assert q.receive(1, 1, 30)[0].receive_count == 2
+    assert q.receive(1, 5, 30)[0].receive_count == 2
 
 
 def test_dynamodb():
