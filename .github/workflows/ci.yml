@@ -36,13 +36,13 @@ jobs:
             mcr.microsoft.com/azure-storage/azurite:3.35.0 \
             azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
       - run: pip install -e ".[aws,azure,dev]" pip-audit
-      - run: ruff check . && ruff format --check .
+      - run: .github/scripts/run.sh bash -c "ruff check . && ruff format --check ."
       - name: pytest（moto で AWS、Azurite で Azure を含む）
         env:
           RP_TEST_AZURITE: ${{ env.AZURITE }}
-        run: pytest -q -rs --cov=review_platform --cov-report=term-missing --cov-fail-under=85
+        run: .github/scripts/run.sh pytest -q -rs --cov=review_platform --cov-report=term-missing --cov-fail-under=85
       - name: 依存の脆弱性（pip-audit）
-        run: pip-audit --skip-editable --progress-spinner off
+        run: .github/scripts/run.sh pip-audit --skip-editable --progress-spinner off
 
   test-windows:
     name: test (Windows)
@@ -55,7 +55,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[aws,dev]"
-      - run: pytest -q -rs
+      - run: bash .github/scripts/run.sh pytest -q -rs
 
   terraform:
     name: terraform (${{ matrix.cloud }})
@@ -74,11 +74,11 @@ jobs:
       - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: "1.9.8"
-      - run: terraform fmt -check -recursive
-      - run: terraform init -backend=false -input=false
-      - run: terraform validate
+      - run: "$GITHUB_WORKSPACE/.github/scripts/run.sh" terraform fmt -check -recursive
+      - run: "$GITHUB_WORKSPACE/.github/scripts/run.sh" terraform init -backend=false -input=false
+      - run: "$GITHUB_WORKSPACE/.github/scripts/run.sh" terraform validate -no-color
       - uses: terraform-linters/setup-tflint@90f302c255ef959cbfb4bd10581afecdb7ece3e6 # v4
-      - run: tflint --format compact
+      - run: "$GITHUB_WORKSPACE/.github/scripts/run.sh" tflint --format compact
 
   iac-scan:
     name: IaC のセキュリティ検査（trivy config）
@@ -94,6 +94,12 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           trivyignores: .trivyignore
+          format: table
+          output: trivy-config.txt
+      - if: always()
+        run: cat trivy-config.txt
+      - if: failure()
+        run: grep -E "^(AVD|AWS|AZU|KSV|DS)-|HIGH|CRITICAL|^ *[a-z_]+\.tf:[0-9]" trivy-config.txt | head -80 | sed 's/^/::error::/'
 
   e2e:
     name: e2e (${{ matrix.profile }})
@@ -127,7 +133,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - run: docker build -t review-platform:ci .
+      - run: .github/scripts/run.sh docker build -t review-platform:ci .
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: review-platform:ci
@@ -135,3 +141,9 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           trivyignores: .trivyignore
+          format: table
+          output: trivy-image.txt
+      - if: always()
+        run: cat trivy-image.txt || true
+      - if: failure()
+        run: grep -E "HIGH|CRITICAL|CVE-" trivy-image.txt | head -80 | sed 's/^/::error::/'
