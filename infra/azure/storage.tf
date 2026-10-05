@@ -16,7 +16,7 @@ resource "azurerm_storage_account" "this" {
   https_traffic_only_enabled       = true
   shared_access_key_enabled        = false
   default_to_oauth_authentication  = true
-  public_network_access_enabled    = false
+  public_network_access            = "Disabled"
   allow_nested_items_to_be_public  = false
   cross_tenant_replication_enabled = false
 

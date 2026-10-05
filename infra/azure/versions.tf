@@ -1,6 +1,7 @@
 # Terraform と azurerm プロバイダの版を固定する。
-# azurerm 4.77 以上が必要（storage_table の storage_account_id、
-# custom_scale_rule の identity_id を使うため）。5.x は未検証なので上限を切る。
+# azurerm 5.0 以上が必要（5.x で private DNS のリンク・レコードが private_dns_zone_id を
+# 取るようになったため。storage_table の storage_account_id、custom_scale_rule の identity_id も使う）。
+# 5.9 以降は未検証なので上限を切る。
 
 terraform {
   required_version = ">= 1.6"
@@ -8,7 +9,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 4.77, < 5.0"
+      version = ">= 5.0, < 5.9"
     }
   }
 

@@ -38,20 +38,18 @@ resource "azurerm_private_dns_zone" "aca" {
 resource "azurerm_private_dns_zone_virtual_network_link" "aca" {
   count = var.internal_only ? 1 : 0
 
-  name                  = "link-aca"
-  resource_group_name   = azurerm_resource_group.this.name
-  private_dns_zone_name = azurerm_private_dns_zone.aca[0].name
-  virtual_network_id    = azurerm_virtual_network.this.id
-  registration_enabled  = false
-  tags                  = local.tags
+  name                 = "link-aca"
+  private_dns_zone_id  = azurerm_private_dns_zone.aca[0].id
+  virtual_network_id   = azurerm_virtual_network.this.id
+  registration_enabled = false
+  tags                 = local.tags
 }
 
 resource "azurerm_private_dns_a_record" "aca_wildcard" {
   count = var.internal_only ? 1 : 0
 
   name                = "*"
-  zone_name           = azurerm_private_dns_zone.aca[0].name
-  resource_group_name = azurerm_resource_group.this.name
+  private_dns_zone_id = azurerm_private_dns_zone.aca[0].id
   ttl                 = 300
   records             = [azurerm_container_app_environment.this.static_ip_address]
   tags                = local.tags
