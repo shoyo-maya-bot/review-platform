@@ -111,6 +111,7 @@ pytest -q                          # Azure の試験は RP_TEST_AZURITE（Azurit
 scripts/e2e.sh local               # docker compose で通しの試験（aws・azure も）
 ```
 
-## ライセンス
+## セキュリティ・ライセンス
 
-MIT
+- 脆弱性を見つけたら、公開の Issue ではなく [SECURITY.md](SECURITY.md) の方法で知らせてください
+- ライセンスは [MIT](LICENSE) です
