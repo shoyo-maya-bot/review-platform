@@ -6,6 +6,10 @@ updates:
     open-pull-requests-limit: 5
     groups:
       python: { patterns: ["*"] }
+    ignore:
+      # mcp 2.x は FastMCP が無くなる（MCPServer へ改名）ため、移行は手作業で行う
+      - dependency-name: mcp
+        versions: [">=2"]
   - package-ecosystem: docker
     directory: /
     schedule: { interval: monthly }
