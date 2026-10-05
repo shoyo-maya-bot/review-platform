@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # terraform-lock が GITHUB_TOKEN で入れた lock のコミットでは push の CI が動かないので、手で回せるようにする
+  workflow_dispatch:
 
 permissions:
   contents: read
