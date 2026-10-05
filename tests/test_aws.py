@@ -1,0 +1,98 @@
+"""AWS の実装を moto（AWS のふりをするライブラリ）で試す. CI では必ず流す."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+boto3 = pytest.importorskip("boto3")
+moto = pytest.importorskip("moto")
+
+from contract import blob_contract, queue_contract, repo_contract  # noqa: E402
+from review_platform.adapters.aws import OWNER_INDEX, DynamoJobRepository, S3BlobStore, SqsQueue  # noqa: E402
+
+pytestmark = pytest.mark.aws
+REGION = "ap-northeast-1"
+
+
+@pytest.fixture(autouse=True)
+def aws(monkeypatch):
+    for k, v in {"AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing", "AWS_DEFAULT_REGION": REGION}.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    with moto.mock_aws():
+        yield
+
+
+def test_s3():
+    boto3.client("s3", region_name=REGION).create_bucket(Bucket="rp-test", CreateBucketConfiguration={"LocationConstraint": REGION})
+    blob_contract(S3BlobStore("rp-test", REGION))
+
+
+def test_sqs():
+    url = boto3.client("sqs", region_name=REGION).create_queue(QueueName="rp-jobs")["QueueUrl"]
+    q = SqsQueue(url, REGION)
+    queue_contract(q)
+    q.send("20260101000000000000-0123456789abcdef")
+    m = q.receive(1, 1, 30)[0]
+    q.dead_letter(m)  # すぐ見えるようにして受信回数を進める（DLQ への移動は SQS の redrive が行う）
+    assert q.receive(1, 1, 30)[0].receive_count == 2
+
+
+def test_dynamodb():
+    boto3.client("dynamodb", region_name=REGION).create_table(
+        TableName="rp-jobs",
+        BillingMode="PAY_PER_REQUEST",
+        AttributeDefinitions=[{"AttributeName": "job_id", "AttributeType": "S"}, {"AttributeName": "owner", "AttributeType": "S"}],
+        KeySchema=[{"AttributeName": "job_id", "KeyType": "HASH"}],
+        GlobalSecondaryIndexes=[
+            {
+                "IndexName": OWNER_INDEX,
+                "KeySchema": [{"AttributeName": "owner", "KeyType": "HASH"}, {"AttributeName": "job_id", "KeyType": "RANGE"}],
+                "Projection": {"ProjectionType": "ALL"},
+            }
+        ],
+    )
+    repo_contract(DynamoJobRepository("rp-jobs", REGION))
+
+
+def test_bedrock_request_shape(monkeypatch):
+    """Bedrock の呼び出しの形（Messages の形・anthropic_version）と、出力が切れたときの扱い."""
+    import io
+    import json
+
+    from review_platform.adapters.llm import BedrockLLM, LLMError
+
+    llm = BedrockLLM(REGION)
+    sent = {}
+
+    def fake_invoke(**kw):
+        sent.update(kw)
+        body = {"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 10, "output_tokens": 2}, "stop_reason": sent.get("_stop", "end_turn")}
+        return {"body": io.BytesIO(json.dumps(body).encode())}
+
+    monkeypatch.setattr(llm.client, "invoke_model", fake_invoke)
+    r = llm.complete("apac.anthropic.claude-sonnet", "sys", "user", 100)
+    req = json.loads(sent["body"])
+    assert req["anthropic_version"] == "bedrock-2023-05-31" and req["messages"][0]["content"] == "user" and r.text == "ok"
+
+    def cut(**kw):
+        body = {"content": [{"type": "text", "text": "…"}], "usage": {}, "stop_reason": "max_tokens"}
+        return {"body": io.BytesIO(json.dumps(body).encode())}
+
+    monkeypatch.setattr(llm.client, "invoke_model", cut)
+    with pytest.raises(LLMError):
+        llm.complete("m", "s", "u", 1)
+
+
+def test_factory_builds_aws(monkeypatch):
+    from dataclasses import replace
+
+    from review_platform.config import Settings
+    from review_platform.factory import storage
+
+    s = replace(Settings(), backend="aws", s3_bucket="b", sqs_queue_url="https://sqs.example/q", ddb_table="t", aws_region=REGION)
+    blobs, queue, repo = storage(s)
+    assert type(blobs).__name__ == "S3BlobStore" and type(queue).__name__ == "SqsQueue" and type(repo).__name__ == "DynamoJobRepository"
+    assert os.environ["AWS_DEFAULT_REGION"] == REGION

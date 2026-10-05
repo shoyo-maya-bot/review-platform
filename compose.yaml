@@ -1,0 +1,113 @@
+# ローカルで動かす. どれか 1 つのプロファイルを選ぶ（API はどれも 127.0.0.1:8080）.
+#   docker compose --profile local up -d --build   ファイルと SQLite だけ（いちばん軽い）
+#   docker compose --profile aws   up -d --build   AWS の実装（S3・SQS・DynamoDB）を moto サーバーで
+#   docker compose --profile azure up -d --build   Azure の実装（Blob・Queue・Table）を Azurite で
+# 先に .env を作る（.env.example を参照. トークンは `review-platform token` で作る）.
+
+x-app: &app
+  build: .
+  image: review-platform:local
+  restart: unless-stopped
+  read_only: true
+  tmpfs: ["/tmp"]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+
+x-env: &env
+  RP_AUTH: token
+  RP_API_TOKENS_SHA256: ${RP_API_TOKENS_SHA256:-}   # 空だと API は起動時に止まる（.env に入れる）
+  RP_LLM: ${RP_LLM:-fake}
+  RP_LLM_BASE_URL: ${RP_LLM_BASE_URL:-https://api.anthropic.com}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  RP_LLM_MODEL_STANDARD: ${RP_LLM_MODEL_STANDARD:-claude-sonnet-5-5}
+  RP_LLM_MODEL_DEEP: ${RP_LLM_MODEL_DEEP:-claude-opus-5-5}
+  RP_PUBLIC_BASE_URL: http://127.0.0.1:8080
+  RP_LOG_LEVEL: INFO
+
+x-aws: &aws
+  <<: *env
+  RP_BACKEND: aws
+  RP_AWS_ENDPOINT_URL: http://moto:5000
+  AWS_REGION: ap-northeast-1
+  AWS_ACCESS_KEY_ID: test          # moto 用のダミー（本物の鍵ではない）
+  AWS_SECRET_ACCESS_KEY: test
+  RP_S3_BUCKET: rp-local
+  RP_SQS_QUEUE_URL: http://moto:5000/123456789012/rp-jobs
+  RP_DDB_TABLE: rp-jobs
+
+x-azure: &azure
+  <<: *env
+  RP_BACKEND: azure
+  # Azurite の公開されている開発用アカウント（秘密ではない）. クラウドではマネージド ID を使う
+  RP_AZURE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+
+services:
+  # ---- local
+  api:
+    <<: *app
+    profiles: [local]
+    command: ["api"]
+    environment: { <<: *env, RP_BACKEND: local }
+    volumes: ["rp-data:/data"]
+    ports: ["127.0.0.1:8080:8080"]
+  worker:
+    <<: *app
+    profiles: [local]
+    command: ["worker"]
+    environment: { <<: *env, RP_BACKEND: local }
+    volumes: ["rp-data:/data"]
+
+  # ---- aws（moto サーバー）
+  moto:
+    image: motoserver/moto:5.1.14
+    profiles: [aws]
+    healthcheck: { test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:5000/moto-api/')"], interval: 3s, retries: 20 }
+  init-aws:
+    <<: *app
+    profiles: [aws]
+    restart: "no"
+    entrypoint: ["python", "/app/scripts/init_emulators.py", "aws"]
+    environment: *aws
+    depends_on: { moto: { condition: service_healthy } }
+  api-aws:
+    <<: *app
+    profiles: [aws]
+    command: ["api"]
+    environment: *aws
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on: { init-aws: { condition: service_completed_successfully } }
+  worker-aws:
+    <<: *app
+    profiles: [aws]
+    command: ["worker"]
+    environment: *aws
+    depends_on: { init-aws: { condition: service_completed_successfully } }
+
+  # ---- azure（Azurite）
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.35.0
+    profiles: [azure]
+    command: ["azurite", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--tableHost", "0.0.0.0", "--skipApiVersionCheck", "--loose"]
+  init-azure:
+    <<: *app
+    profiles: [azure]
+    restart: "no"
+    entrypoint: ["python", "/app/scripts/init_emulators.py", "azure"]
+    environment: *azure
+    depends_on: [azurite]
+  api-azure:
+    <<: *app
+    profiles: [azure]
+    command: ["api"]
+    environment: *azure
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on: { init-azure: { condition: service_completed_successfully } }
+  worker-azure:
+    <<: *app
+    profiles: [azure]
+    command: ["worker"]
+    environment: *azure
+    depends_on: { init-azure: { condition: service_completed_successfully } }
+
+volumes:
+  rp-data:

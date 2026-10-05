@@ -1,0 +1,39 @@
+# terraform.tfvars にコピーして、<your-value> を書き換える。
+# terraform.tfvars はリポジトリに入れない（.gitignore に入れておく）。
+
+subscription_id = "<your-value>"
+location        = "japaneast"
+env             = "dev"
+name_suffix     = "<your-value>" # 英小文字と数字で 3〜8 文字。例: a1b2c3
+
+# API に届いてよい送信元（自分の回線の IP など）。
+allowed_cidrs = ["<your-value>/32"]
+
+# Key Vault にシークレットを入れる端末の IP。
+admin_cidrs = ["<your-value>/32"]
+
+# 1 回目は false。イメージの push とシークレット登録のあとに true にして、もう一度 apply する。
+deploy_apps = false
+image_tag   = "<your-value>"
+
+# Entra ID（アプリ登録の手順は docs/AZURE.md）。
+jwt_issuer   = "https://login.microsoftonline.com/<your-value>/v2.0"
+jwt_audience = "<your-value>" # v2 トークンではアプリ（クライアント）ID
+jwt_jwks_url = "https://login.microsoftonline.com/<your-value>/discovery/v2.0/keys"
+
+# LLM の窓口（Messages API と同じ形）。Microsoft Foundry の例。
+llm_mode           = "anthropic"
+llm_base_url       = "https://<your-value>.services.ai.azure.com/anthropic"
+llm_model_standard = "<your-value>" # Foundry のデプロイ名
+llm_model_deep     = "<your-value>" # 空 "" なら検証しない
+
+# 通知と予算。
+alert_emails      = ["<your-value>"]
+budget_amount     = 10000 # 請求の通貨（日本の契約なら円）
+budget_start_date = "<your-value>" # 例: 2026-10-01T00:00:00Z（今月か、それより後の月の 1 日）
+
+# 閉じたネットワークを強めるとき（費用が増える）。
+# acr_sku                      = "Premium"
+# acr_private_endpoint_enabled = true
+# key_vault_public_network_access_enabled = false
+# internal_only                = true

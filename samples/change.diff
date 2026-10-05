@@ -1,0 +1,17 @@
+diff --git a/src/main/java/com/example/sample/member/MemberService.java b/src/main/java/com/example/sample/member/MemberService.java
+--- a/src/main/java/com/example/sample/member/MemberService.java
++++ b/src/main/java/com/example/sample/member/MemberService.java
+@@ -30,11 +30,7 @@ public class MemberService {
+     @Transactional
+     public Member register(String name, String email) {
+         String normalized = email.trim().toLowerCase(Locale.ROOT);
+         MemberRecord rec = new MemberRecord(name.trim(), normalized);
+-        try {
+-            mapper.insert(rec);
+-        } catch (DuplicateKeyException e) {
+-            throw new BusinessException(MessageIds.EMAIL_ALREADY_USED, normalized);
+-        }
++        mapper.insert(rec);
+         return rec.toMember();
+     }
+ }

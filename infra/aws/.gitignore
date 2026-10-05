@@ -1,0 +1,9 @@
+# Terraform の作業ファイル。.terraform.lock.hcl はリポジトリに入れる。
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+# 自分の値を書いたファイル。例（terraform.tfvars.example）だけを入れる。
+terraform.tfvars
+*.auto.tfvars

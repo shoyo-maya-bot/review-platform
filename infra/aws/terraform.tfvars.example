@@ -1,0 +1,58 @@
+# このファイルを terraform.tfvars にコピーして値を入れる。
+#   cp terraform.tfvars.example terraform.tfvars
+# terraform.tfvars はリポジトリに入れない（.gitignore に入れておく）。
+# ここに秘密情報（API キーなど）は書かない。シークレットは Terraform の外で入れる。
+
+region = "ap-northeast-1"
+env    = "dev"
+
+# ALB に接続してよい送信元（会社の出口 IP など）。必ず指定する。
+allowed_cidrs = ["<your-office-cidr>/32"]
+
+# ALB の HTTPS 用証明書（同じリージョンの ACM）。
+acm_certificate_arn = "arn:aws:acm:ap-northeast-1:<account-id>:certificate/<certificate-id>"
+
+# 証明書のドメイン。DNS で ALB に向ける。
+public_base_url = "https://<your-domain>"
+
+# 最初は ECR を作ってから push する（docs/AWS.md の手順を参照）。タグは latest 以外。
+image = "<account-id>.dkr.ecr.ap-northeast-1.amazonaws.com/review-platform-dev:<tag>"
+
+# アラームと予算の通知先。
+notification_email = "<your-email>"
+monthly_budget_usd = 300
+
+# --- LLM（Bedrock） ---
+llm_provider       = "bedrock"
+llm_model_standard = "<your-inference-profile-id>"
+llm_model_deep     = "" # 上位モデルで検証するときだけ、推論プロファイル ID を入れる。
+
+# ワーカーが呼んでよい ARN。推論プロファイルと、その先の基盤モデル（ルーティング先の各リージョン）を並べる。
+bedrock_model_arns = [
+  "arn:aws:bedrock:ap-northeast-1:<account-id>:inference-profile/<your-inference-profile-id>",
+  "arn:aws:bedrock:ap-northeast-1::foundation-model/<your-model-id>",
+  # "arn:aws:bedrock:<other-region>::foundation-model/<your-model-id>",
+]
+
+# --- 費用を抑える設定（学習用） ---
+interface_endpoint_az_count = 2     # 1 にするとエンドポイント代が約半分
+worker_min_count            = 0     # ジョブがないときワーカーは 0 台
+worker_max_count            = 3
+worker_use_spot             = false # true で安くなるが途中で止まることがある
+
+# --- 後片付けを楽にする（学習用。本番は false のまま） ---
+force_destroy                = true
+dynamodb_deletion_protection = false
+secret_recovery_window_days  = 0
+
+# --- 認証 ---
+cognito_mfa = "OPTIONAL"
+# CLI でトークンを取る手順（docs/AWS.md）を試すときだけ true。
+cognito_allow_user_password_auth = true
+# ログイン画面（認可コード + PKCE）を使うときだけ。
+# cognito_domain_prefix = "<your-unique-prefix>"
+# cognito_callback_urls = ["http://localhost:8765/callback"]
+
+# --- 通知・API キー（使うときだけ true。値は Terraform の外で入れる） ---
+enable_slack_webhook_secret     = false
+enable_anthropic_api_key_secret = false

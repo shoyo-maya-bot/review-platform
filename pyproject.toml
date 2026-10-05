@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "review-platform"
+version = "0.1.0"
+description = "設計書とコードの差分を AI でレビューする基盤（API・ワーカー・MCP）。ローカル・AWS・Azure で同じコードが動く"
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "starlette>=0.40,<2",
+  "uvicorn>=0.30,<1",
+  "httpx>=0.27,<1",
+  "pyjwt[crypto]>=2.8,<3",
+  "pyyaml>=6,<7",
+  "mcp>=1.10,<2",
+  # 差分のレビュー（振り分け・検証・結果の読み取り）. agent-lab の auto-review をコミット SHA で固定
+  "auto-review @ git+https://github.com/shoyo-maya-bot/agent-lab.git@5a8643930ff1bdba90d1ef32eceb54a7b94268c7#subdirectory=auto-review",
+]
+
+[project.optional-dependencies]
+aws = ["boto3>=1.34,<2"]
+azure = ["azure-storage-blob>=12.19,<13", "azure-storage-queue>=12.9,<13", "azure-data-tables>=12.5,<13", "azure-identity>=1.15,<2"]
+# 設計書の変換（doc2md）. ワーカーのイメージにだけ入れる
+tools = ["doc-to-markdown @ git+https://github.com/shoyo-maya-bot/doc-to-markdown.git@b851f223d85b0d62eaaca9a14b83116a093bf5c8"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "moto[s3,sqs,dynamodb]>=5,<6"]
+
+[project.scripts]
+review-platform = "review_platform.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+review_platform = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+filterwarnings = ["ignore:Use `streamable_http_client` instead:DeprecationWarning"]
+markers = [
+  "aws: moto で AWS の実装を試す（boto3 と moto が要る）",
+  "azure: Azurite で Azure の実装を試す（RP_TEST_AZURITE に接続文字列）",
+]
+
+[tool.ruff]
+line-length = 180
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "S", "BLE"]
+ignore = ["S101", "S603", "S607", "S311"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S104", "S105", "S106", "S108", "BLE001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["review_platform", "conftest", "contract"]

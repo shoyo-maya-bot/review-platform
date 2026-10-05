@@ -1,0 +1,110 @@
+# 設定（環境変数の契約）
+
+アプリ（API・ワーカー・MCP）は **環境変数だけ** で動きを変えます。Terraform（AWS・Azure）と docker compose は、ここに書いた名前で値を渡します。
+名前を変えるときは、アプリ・Terraform・compose・このページを同じ PR で直してください。
+
+秘密情報（API キー・Webhook の URL・接続文字列）は、クラウドではシークレットの仕組み（AWS Secrets Manager / Azure Key Vault）から渡し、リポジトリやイメージには入れません。
+
+## 共通
+
+| 変数 | 既定 | 意味 |
+|---|---|---|
+| `RP_BACKEND` | `local` | 保存・キュー・ジョブ管理の実装。`local`（ファイルと SQLite）/ `aws` / `azure` |
+| `RP_LOG_LEVEL` | `INFO` | ログの細かさ。ログは 1 行 1 JSON で標準出力へ |
+| `RP_MAX_UPLOAD_MB` | `10` | 受け付けるファイルの上限 |
+| `RP_ALLOWED_EXTENSIONS` | `.xlsx,.xlsm,.docx,.pptx,.pdf,.md,.diff,.patch` | 受け付ける拡張子 |
+| `RP_JOB_TTL_DAYS` | `30` | ジョブと結果を消すまでの日数（AWS は DynamoDB の TTL、S3・Blob はライフサイクルでも消す） |
+| `RP_PUBLIC_BASE_URL` | （空） | 結果の URL を通知に載せるときの基準 URL. MCP はこの Host 以外からの要求を断る（DNS リバインディング対策） |
+| `RP_RATE_LIMIT_PER_MINUTE` | `30` | 1 人が 1 分間に送れる件数（API と MCP の POST）. 1 台ごとの数え方 |
+
+## 認証（API と MCP）
+
+| 変数 | 既定 | 意味 |
+|---|---|---|
+| `RP_AUTH` | `token` | `none`（ローカルの試験だけ）/ `token` / `jwt` |
+| `RP_API_TOKENS_SHA256` | （空） | `token` のとき、許可するトークンの SHA-256（16 進）をカンマ区切りで。トークンそのものは置かない |
+| `RP_JWT_ISSUER` | （空） | `jwt` のとき、発行者（Cognito のユーザープール URL / Entra ID のテナント URL） |
+| `RP_JWT_AUDIENCE` | （空） | `jwt` のとき、対象（アプリクライアント ID / アプリケーション ID URI） |
+| `RP_JWT_JWKS_URL` | （空） | `jwt` のとき、公開鍵の URL |
+
+`RP_AUTH=none` は、`RP_BACKEND=local` かつ待ち受けが `127.0.0.1` のときしか起動しません（誤ってクラウドで認証なしにしないため）。
+
+## 保存・キュー・ジョブ管理
+
+### local
+
+| 変数 | 既定 | 意味 |
+|---|---|---|
+| `RP_DATA_DIR` | `./.rp-data` | ファイル・SQLite の置き場（API とワーカーで共有する） |
+
+### aws
+
+| 変数 | 意味 |
+|---|---|
+| `AWS_REGION` | リージョン |
+| `RP_S3_BUCKET` | 原本と結果を置くバケット |
+| `RP_SQS_QUEUE_URL` | ジョブのキュー（デッドレターキューは Terraform 側で設定） |
+| `RP_DDB_TABLE` | ジョブの表（パーティションキー `job_id`（文字列）、TTL 属性 `expires_at`） |
+| `RP_AWS_ENDPOINT_URL` | （任意）エミュレーター（ElasticMQ・DynamoDB Local・S3 互換）に向けるときだけ |
+
+認証は実行ロール（ECS のタスクロール）。アクセスキーは使いません。
+
+### azure
+
+| 変数 | 意味 |
+|---|---|
+| `RP_AZURE_BLOB_URL` | `https://<account>.blob.core.windows.net` |
+| `RP_AZURE_QUEUE_URL` | `https://<account>.queue.core.windows.net` |
+| `RP_AZURE_TABLE_URL` | `https://<account>.table.core.windows.net` |
+| `RP_AZURE_CONTAINER` | 原本と結果を置くコンテナ（既定 `review`） |
+| `RP_AZURE_QUEUE_NAME` | ジョブのキュー（既定 `jobs`） |
+| `RP_AZURE_TABLE_NAME` | ジョブの表（既定 `jobs`） |
+| `AZURE_CLIENT_ID` | ユーザー割り当てマネージド ID のクライアント ID（Container Apps が使う） |
+| `RP_AZURE_CONNECTION_STRING` | （任意）Azurite に向けるときだけ。クラウドでは使わない |
+
+認証はマネージド ID（`DefaultAzureCredential`）。
+
+## LLM
+
+| 変数 | 既定 | 意味 |
+|---|---|---|
+| `RP_LLM` | `none` | `none`（LLM を使わない）/ `fake`（試験用）/ `anthropic`（Messages API と同じ形の窓口）/ `bedrock` |
+| `RP_LLM_BASE_URL` | `https://api.anthropic.com` | `anthropic` のときの窓口。社内の中継や Microsoft Foundry など、Messages API と同じ形の窓口に向けられる |
+| `ANTHROPIC_API_KEY` | （空） | `anthropic` のときの API キー（シークレットから渡す） |
+| `RP_LLM_MODEL_STANDARD` | `claude-sonnet-5-5` | ふだんのレビューのモデル。Bedrock では推論プロファイル ID |
+| `RP_LLM_MODEL_DEEP` | `claude-opus-5-5` | 検証に使う上位モデル。空なら検証しない |
+| `RP_BUDGET_PER_JOB_USD` | `1.0` | 1 ジョブの費用の上限（見積もりで超えそうなら上位モデルを省く） |
+
+## 通知
+
+| 変数 | 既定 | 意味 |
+|---|---|---|
+| `RP_NOTIFY` | `none` | `none` / `slack`（Slack・Mattermost の Incoming Webhook と同じ形） |
+| `RP_SLACK_WEBHOOK_URL` | （空） | Webhook の URL（シークレットから渡す） |
+
+## 待ち受け
+
+| 変数 | 既定 | 意味 |
+|---|---|---|
+| `RP_HOST` | `127.0.0.1` | API の待ち受け。コンテナでは `0.0.0.0` |
+| `RP_PORT` | `8080` | API の待ち受けポート。MCP は同じポートの `/mcp` |
+
+## コンテナの起動
+
+1 つのイメージで、起動コマンドだけを変えます。
+
+| 役割 | コマンド | 置き場（AWS / Azure） |
+|---|---|---|
+| API と MCP | `review-platform api` | ECS サービス（ALB の後ろ）/ Container App（外部 ingress） |
+| ワーカー | `review-platform worker` | ECS サービス（SQS の滞留で台数を増減）/ Container App（キューの長さで KEDA が増減） |
+
+ヘルスチェックは `GET /healthz`（認証なし。中身は `{"status":"ok"}` だけ）。
+
+## 保存のキー
+
+| もの | キー |
+|---|---|
+| 原本 | `uploads/<job_id>/<元のファイル名を安全な形にしたもの>` |
+| 結果（JSON） | `results/<job_id>/report.json` |
+| 結果（Markdown） | `results/<job_id>/report.md` |
+| キューのメッセージ | `{"job_id": "<job_id>"}`（中身はジョブ表から読む） |
