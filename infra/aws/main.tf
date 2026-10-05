@@ -61,6 +61,8 @@ locals {
 
       RP_HOST = "0.0.0.0"
       RP_PORT = tostring(local.container_port)
+      # タスクには ALB からしか届かない（セキュリティグループで制限）ので、X-Forwarded-* を信用する。
+      RP_FORWARDED_ALLOW_IPS = "*"
 
       # ルートファイルシステムを読み取り専用にするので、一時ファイルとホームを /tmp に向ける。
       TMPDIR = "/tmp"

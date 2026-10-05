@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 class ConfigError(ValueError):
@@ -92,6 +93,7 @@ class Settings:
 
     host: str = "127.0.0.1"
     port: int = 8080
+    forwarded_allow_ips: str = "127.0.0.1"
 
     @staticmethod
     def from_env() -> Settings:
@@ -131,6 +133,7 @@ class Settings:
             slack_webhook_url=_env("RP_SLACK_WEBHOOK_URL"),
             host=_env("RP_HOST", "127.0.0.1"),
             port=_int("RP_PORT", 8080, 1, 65535),
+            forwarded_allow_ips=_env("RP_FORWARDED_ALLOW_IPS", "127.0.0.1"),
         )
         s.validate()
         return s
@@ -154,5 +157,13 @@ class Settings:
             raise ConfigError("RP_LLM=anthropic のときは ANTHROPIC_API_KEY が必要です")
         if self.notify == "slack" and role == "worker" and not self.slack_webhook_url.startswith("https://"):
             raise ConfigError("RP_NOTIFY=slack のときは https で始まる RP_SLACK_WEBHOOK_URL が必要です")
-        if self.llm_base_url and not self.llm_base_url.startswith(("https://", "http://localhost", "http://127.0.0.1")):
+        if self.llm_base_url and not _https_or_loopback(self.llm_base_url):
             raise ConfigError("RP_LLM_BASE_URL は https で指定してください（ローカルの試験だけ http://localhost を許す）")
+
+
+def _https_or_loopback(url: str) -> bool:
+    """https か、ローカルの試験用の http://localhost・127.0.0.1 だけを許す（ホスト名は完全一致で比べる）."""
+    u = urlparse(url)
+    if u.scheme == "https" and u.hostname:
+        return True
+    return u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1", "::1")

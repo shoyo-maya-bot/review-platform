@@ -39,7 +39,8 @@ class JobQueue(Protocol):
 class JobRepository(Protocol):
     def create(self, job: Job) -> None: ...
     def get(self, job_id: str) -> Job: ...  # 無ければ NotFound
-    def transition(self, job: Job, expected: JobStatus) -> None: ...  # 状態が expected のときだけ上書き。違えば Conflict
+    # 状態が expected（と、指定があれば attempts が expected_attempts）のときだけ上書き. 違えば Conflict
+    def transition(self, job: Job, expected: JobStatus, expected_attempts: int | None = None) -> None: ...
     def list_by_owner(self, owner: str, limit: int = 20) -> list[Job]: ...
     def delete_expired(self, now_epoch: int, limit: int = 100) -> int: ...  # TTL の無い保存先のため
 

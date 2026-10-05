@@ -36,7 +36,7 @@ AWS のサービスへは VPC エンドポイントで届く。
 | `network.tf` | インターフェース型エンドポイント: SQS、ECR（api / dkr）、CloudWatch Logs、STS、Bedrock Runtime、Secrets Manager、Cognito | Bedrock は `llm_provider = bedrock` のとき、Secrets Manager はシークレットを使うときだけ |
 | `storage.tf` | S3 バケット | 公開ブロック、暗号化（SSE-S3 か SSE-KMS）、版管理、TLS 必須、`uploads/` と `results/` を `job_ttl_days` で削除 |
 | `storage.tf` | DynamoDB テーブル | オンデマンド、パーティションキー `job_id`、GSI `owner-job-index`（`owner` + `job_id`）、TTL `expires_at`、PITR 有効 |
-| `queue.tf` | SQS キューと DLQ | 3 回失敗で DLQ へ。可視性タイムアウト 900 秒。SSE-SQS |
+| `queue.tf` | SQS キューと DLQ | 5 回受信で DLQ へ（ワーカーは 3 回で failed にするので、その後の保険）。可視性タイムアウト 900 秒。SSE-SQS |
 | `ecr.tf` | ECR リポジトリ | タグ上書き不可、push 時スキャン、最新 20 個を残す |
 | `ecs.tf` | ECS クラスター、タスク定義 × 2、サービス × 2、オートスケーリング | Container Insights 有効。root 以外のユーザー、読み取り専用ルート、`/tmp` だけ書ける |
 | `alb.tf` | ALB、ターゲットグループ、リスナー（443 / 80） | 80 は 443 へ転送するだけ |
@@ -332,7 +332,7 @@ terraform destroy   # 人が内容を確かめて実行する
 | USER_PASSWORD_AUTH | 例の tfvars で有効にしている | CLI でトークンを取る学習のため | `false` にして、ログイン画面（認可コード + PKCE）を使う |
 | Cognito の脅威保護なし | 高度なセキュリティ機能を使っていない | 上位の料金プランが要るため | 必要なら有効にする |
 | コンテナのヘルスチェックなし | タスク定義に `healthCheck` がない | ECS は Dockerfile の `HEALTHCHECK` を使わない。API は ALB のヘルスチェック（`/healthz`）で見ている | Dockerfile と同じ python のコマンドで、タスク定義に `healthCheck` を足す |
-| ワーカーの Spot | `worker_use_spot = true` だと途中で止まることがある | 安くするための選択肢。既定は false | 止まったジョブは可視性タイムアウト後にやり直し。3 回で DLQ |
+| ワーカーの Spot | `worker_use_spot = true` だと途中で止まることがある | 安くするための選択肢。既定は false | 止まったジョブは可視性タイムアウト後に別のタスクが引き継ぐ。3 回で failed |
 | ログの保存期間 | 既定 30 日 | 費用を抑えるため | 監査の要件に合わせて `log_retention_days` を延ばす |
 
 ## 変数の一覧

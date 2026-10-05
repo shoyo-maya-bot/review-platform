@@ -12,6 +12,7 @@
 | 認証（トークン・JWT・アルゴリズムのすり替え・レート制限） | `tests/test_auth.py` | 同上 |
 | 設定の検査（認証なしはローカルだけ、など） | `tests/test_config_domain.py` | 同上 |
 | ワーカー（条件付き更新・やり直し・失敗の分け方・読めない AI の出力・予算） | `tests/test_worker.py` |
+| 壊れ方（重複配信・処理中の引き継ぎ・やり直しの費用・本文の大きさ・キューの失敗・設定の抜け道） | `tests/test_hardening.py` |
 | 期限切れのジョブの削除（SQLite・Table） | `tests/test_local.py`・`test_azure.py` | 同上 |
 | MCP（本物の HTTP の上で公式 SDK から 5 つの道具。他人のジョブが見えない・認証なしで 401） | `tests/test_mcp.py` | 同上 |
 | CLI・LLM の再試行とエラー・通知の無害化・ログ | `tests/test_cli_llm_notify.py` | 同上 |

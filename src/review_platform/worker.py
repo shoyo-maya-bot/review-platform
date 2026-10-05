@@ -1,14 +1,15 @@
 """ワーカー. キューからジョブを 1 件ずつ取り、変換 → AI レビュー → 結果の保存 → 通知 を行う.
 
-- 冪等: 同じメッセージが 2 回届いても、ジョブ表の状態（条件付き更新）で 1 回分しか処理しない
-- 処理中は定期的にメッセージの「見えない時間」を延ばす（途中で別のワーカーに渡らないように）
+- 冪等: ジョブを取るときは「状態と試行回数が読んだときのまま」の条件付き更新. 2 台が同時に取っても 1 台しか進まない
+- 処理中のジョブには貸し出し期限（updated_at + LEASE_SECONDS）があり、期限内に届いた重複メッセージは見送る
+- 処理中は定期的にメッセージの「見えない時間」とジョブの貸し出し期限を延ばす
 - 一時的な失敗はキューに戻してやり直す. MAX_ATTEMPTS 回失敗したら失敗にする
+- 費用はやり直しをまたいで足し上げ、残りの予算だけを次の試行に渡す
 - SIGTERM を受けたら、処理中のジョブを終えてから止まる
 """
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import signal
@@ -18,24 +19,38 @@ import time
 from pathlib import Path
 
 from .config import Settings
-from .domain import Job, JobKind, JobStatus, iso, now, valid_job_id
+from .domain import Job, JobKind, JobStatus, iso, now, parse_iso, valid_job_id
 from .pipeline import PermanentError, RetryableError, report
 from .pipeline.convert import ToolRunner, to_markdown
-from .ports import BlobStore, Conflict, JobQueue, JobRepository, LLMClient, NotFound, Notifier, QueueMessage
+from .ports import BlobStore, Conflict, JobQueue, JobRepository, LLMClient, LLMReply, NotFound, Notifier, QueueMessage
 
 log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 VISIBILITY_SECONDS = 900
 HEARTBEAT_SECONDS = 300
+LEASE_SECONDS = VISIBILITY_SECONDS  # 心拍が止まってからこの秒数が過ぎたら、別のワーカーが引き継げる
 CLEANUP_INTERVAL_SECONDS = 3600
 
 
-class _Heartbeat:
-    """処理が長くなっても、メッセージが別のワーカーに渡らないよう見えない時間を延ばし続ける."""
+class _CostMeter:
+    """LLM の呼び出しを数える. 試行が途中で失敗しても、それまでに使った費用をジョブに足せるように."""
 
-    def __init__(self, queue: JobQueue, msg: QueueMessage):
-        self.queue, self.msg = queue, msg
+    def __init__(self, llm: LLMClient):
+        self.llm, self.name, self.spent = llm, llm.name, 0.0
+
+    def complete(self, model: str, system: str, user: str, max_tokens: int) -> LLMReply:
+        r = self.llm.complete(model, system, user, max_tokens)
+        self.spent += r.cost_usd
+        return r
+
+
+class _Heartbeat:
+    """処理が長くなっても、メッセージとジョブが別のワーカーに渡らないよう、見えない時間と貸し出し期限を延ばし続ける."""
+
+    def __init__(self, queue: JobQueue, msg: QueueMessage, repo: JobRepository, job: Job):
+        self.queue, self.msg, self.repo = queue, msg, repo
+        self.job = Job.from_dict(job.to_dict())  # 心拍で書き換えるのは写し（本体の状態は変えない）
         self.stop = threading.Event()
         self.t = threading.Thread(target=self._run, daemon=True)
 
@@ -43,7 +58,9 @@ class _Heartbeat:
         while not self.stop.wait(HEARTBEAT_SECONDS):
             try:
                 self.queue.extend(self.msg, VISIBILITY_SECONDS)
-            except Exception:  # noqa: BLE001 - 延長の失敗は致命的ではない（最悪、別のワーカーがやり直す）
+                self.job.updated_at = iso(now())
+                self.repo.transition(self.job, expected=JobStatus.RUNNING, expected_attempts=self.job.attempts)
+            except Exception:  # noqa: BLE001 - 延長の失敗は致命的ではない（最悪、別のワーカーがやり直し、終わりの更新は条件で弾かれる）
                 log.warning("heartbeat failed", extra={"job_id": self.msg.job_id})
 
     def __enter__(self):
@@ -108,38 +125,53 @@ class Worker:
         if job.status in (JobStatus.SUCCEEDED, JobStatus.FAILED):
             self.queue.delete(m)  # 二重に届いたメッセージ
             return
+        if job.status == JobStatus.RUNNING and _lease_active(job):
+            # 別のワーカーが処理中（重複して届いたメッセージ）. 消さずに見送り、見えない時間が切れたら確かめ直す
+            log.info("job leased by another worker; skipping", extra={"job_id": job.job_id})
+            return
         if m.receive_count > MAX_ATTEMPTS or job.attempts >= MAX_ATTEMPTS:
             self._finish(job, m, JobStatus.FAILED, error=f"{MAX_ATTEMPTS} 回やり直しても終わりませんでした")
             return
-        previous = job.status
+        previous, prev_attempts = job.status, job.attempts
         job.status, job.attempts, job.updated_at, job.error = JobStatus.RUNNING, job.attempts + 1, iso(now()), ""
         try:
-            self.repo.transition(job, expected=previous)
+            self.repo.transition(job, expected=previous, expected_attempts=prev_attempts)
         except Conflict:
             log.info("job taken by another worker", extra={"job_id": job.job_id})
             return
         log.info("job started", extra={"job_id": job.job_id, "kind": job.kind.value, "attempt": job.attempts})
         t0 = time.monotonic()
+        meter = _CostMeter(self.llm)
         try:
-            with _Heartbeat(self.queue, m):
-                rep = self._process(job)
+            with _Heartbeat(self.queue, m, self.repo, job):
+                rep = self._process(job, meter, remaining_budget=max(0.0, self.s.budget_per_job_usd - job.cost_usd))
         except PermanentError as e:
+            job.cost_usd += meter.spent
             self._finish(job, m, JobStatus.FAILED, error=str(e)[:500])
             return
         except (RetryableError, Exception) as e:  # noqa: BLE001 - 想定外の失敗もやり直しの対象にする
+            job.cost_usd += meter.spent
             level = logging.WARNING if isinstance(e, RetryableError) else logging.ERROR
-            log.log(level, "job attempt failed", extra={"job_id": job.job_id, "attempt": job.attempts, "error": type(e).__name__}, exc_info=level == logging.ERROR)
+            log.log(
+                level,
+                "job attempt failed",
+                extra={"job_id": job.job_id, "attempt": job.attempts, "error": type(e).__name__, "cost_usd": job.cost_usd},
+                exc_info=level == logging.ERROR,
+            )
             if job.attempts >= MAX_ATTEMPTS:
                 self._finish(job, m, JobStatus.FAILED, error=f"やり直しても失敗しました（{type(e).__name__}）")
                 return
             job.status, job.error, job.updated_at = JobStatus.QUEUED, f"一時的な失敗のため再試行します（{type(e).__name__}）", iso(now())
-            with contextlib.suppress(Conflict):
-                self.repo.transition(job, expected=JobStatus.RUNNING)
+            try:
+                self.repo.transition(job, expected=JobStatus.RUNNING, expected_attempts=job.attempts)
+            except Conflict:
+                log.warning("job state changed concurrently", extra={"job_id": job.job_id})
+                return
             # メッセージは消さない. 見えない時間が切れたら、またどこかのワーカーに届く
             self.queue.extend(m, 60 * job.attempts)
             return
         job.summary = report.summary(rep)
-        job.cost_usd = rep["cost_usd"]
+        job.cost_usd += rep["cost_usd"]
         log.info(
             "job processed",
             extra={"job_id": job.job_id, "seconds": round(time.monotonic() - t0, 1), "cost_usd": job.cost_usd, **{f"n_{k}": v for k, v in job.summary["severity"].items()}},
@@ -150,7 +182,7 @@ class Worker:
         previous = job.status
         job.status, job.error, job.updated_at = status, error, iso(now())
         try:
-            self.repo.transition(job, expected=previous)
+            self.repo.transition(job, expected=previous, expected_attempts=job.attempts)
         except Conflict:
             log.warning("job state changed concurrently", extra={"job_id": job.job_id})
             return
@@ -161,15 +193,15 @@ class Worker:
         self.notifier.notify(job, url)
 
     # ---- 中身
-    def _process(self, job: Job) -> dict:
+    def _process(self, job: Job, llm: LLMClient, remaining_budget: float) -> dict:
         data = self.blobs.get(job.input_key)
         if job.kind == JobKind.DIFF:
             from .pipeline.diffreview import review_diff
 
             text = data.decode("utf-8")
-            if self.llm.name == "none":
+            if llm.name == "none":
                 raise PermanentError("RP_LLM=none のため、差分のレビューはできません")
-            out = review_diff(text, self.llm, self.s.llm_model_standard, self.s.llm_model_deep, self.s.budget_per_job_usd, job.title)
+            out = review_diff(text, llm, self.s.llm_model_standard, self.s.llm_model_deep, remaining_budget, job.title)
             rep = report.build(job, out.findings, out.calls, out.notes, routing=out.routing)
         else:
             from .pipeline.document import DocumentReviewer
@@ -177,10 +209,10 @@ class Worker:
             with tempfile.TemporaryDirectory(prefix="rp-") as tmp:
                 conv = to_markdown(job.filename, data, Path(tmp), self.runner)
             findings, calls, notes = [], [], []
-            if self.llm.name == "none":
+            if llm.name == "none":
                 notes.append("RP_LLM=none のため、変換と変換ロスの確認だけを行いました")
             else:
-                out = DocumentReviewer(self.llm, self.s.llm_model_standard, self.s.llm_model_deep, self.s.budget_per_job_usd).review(job.filename, conv.markdown)
+                out = DocumentReviewer(llm, self.s.llm_model_standard, self.s.llm_model_deep, remaining_budget).review(job.filename, conv.markdown)
                 findings, calls, notes = out.findings, out.calls, out.notes
             rep = report.build(job, findings, calls, notes, warnings=conv.warnings)
             self.blobs.put(f"results/{job.job_id}/document.md", conv.markdown.encode("utf-8"), "text/markdown; charset=utf-8")
@@ -189,3 +221,10 @@ class Worker:
         self.blobs.put(job.report_json_key, json.dumps(rep, ensure_ascii=False, indent=1).encode("utf-8"), "application/json")
         self.blobs.put(job.report_md_key, report.markdown(rep).encode("utf-8"), "text/markdown; charset=utf-8")
         return rep
+
+
+def _lease_active(job: Job) -> bool:
+    try:
+        return (now() - parse_iso(job.updated_at)).total_seconds() < LEASE_SECONDS
+    except ValueError:
+        return False

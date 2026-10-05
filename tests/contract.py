@@ -51,6 +51,11 @@ def repo_contract(repo) -> None:
     with pytest.raises(Conflict):
         repo.transition(a, expected=JobStatus.QUEUED)  # もう queued ではない
     assert repo.get(a.job_id).status == JobStatus.RUNNING
+    a.attempts = 1
+    repo.transition(a, expected=JobStatus.RUNNING, expected_attempts=0)
+    with pytest.raises(Conflict):
+        repo.transition(a, expected=JobStatus.RUNNING, expected_attempts=0)  # 試行回数が進んでいる（別のワーカーが取った）
+    assert repo.get(a.job_id).attempts == 1
     mine = repo.list_by_owner("alice", 10)
     assert {j.job_id for j in mine} == {a.job_id, b.job_id}
     assert [j.job_id for j in repo.list_by_owner("alice", 1)] == [max(a.job_id, b.job_id)]

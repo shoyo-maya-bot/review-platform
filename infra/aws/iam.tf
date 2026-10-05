@@ -128,7 +128,6 @@ data "aws_iam_policy_document" "api_task" {
     actions = [
       "dynamodb:PutItem",
       "dynamodb:GetItem",
-      "dynamodb:UpdateItem",
       "dynamodb:Query",
     ]
     resources = [aws_dynamodb_table.jobs.arn, "${aws_dynamodb_table.jobs.arn}/index/owner-job-index"]
@@ -199,7 +198,6 @@ data "aws_iam_policy_document" "worker_task" {
     actions = [
       "dynamodb:GetItem",
       "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
     ]
     resources = [aws_dynamodb_table.jobs.arn]
   }

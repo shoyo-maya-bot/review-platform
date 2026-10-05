@@ -73,7 +73,7 @@
 | `ANTHROPIC_API_KEY` | （空） | `anthropic` のときの API キー（シークレットから渡す） |
 | `RP_LLM_MODEL_STANDARD` | `claude-sonnet-5-5` | ふだんのレビューのモデル。Bedrock では推論プロファイル ID |
 | `RP_LLM_MODEL_DEEP` | `claude-opus-5-5` | 検証に使う上位モデル。空なら検証しない |
-| `RP_BUDGET_PER_JOB_USD` | `1.0` | 1 ジョブの費用の上限（見積もりで超えそうなら上位モデルを省く） |
+| `RP_BUDGET_PER_JOB_USD` | `1.0` | 1 ジョブの費用の上限. やり直しをまたいで足し上げる（見積もりで超えそうなら上位モデルを省き、ふだんのレビューも超えるなら failed） |
 
 ## 通知
 
@@ -88,6 +88,7 @@
 |---|---|---|
 | `RP_HOST` | `127.0.0.1` | API の待ち受け。コンテナでは `0.0.0.0` |
 | `RP_PORT` | `8080` | API の待ち受けポート。MCP は同じポートの `/mcp` |
+| `RP_FORWARDED_ALLOW_IPS` | `127.0.0.1` | `X-Forwarded-For` などを信用する送り元. ロードバランサーからしか届かない構成（Terraform の AWS・Azure）だけ `*` にする |
 
 ## コンテナの起動
 

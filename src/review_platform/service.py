@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 
@@ -47,7 +48,14 @@ class Services:
         job = Job.create(owner=owner, kind=kind, filename=name, ttl_days=s.job_ttl_days, title=title.strip())
         self.blobs.put(job.input_key, data, _content_type(ext))
         self.repo.create(job)
-        self.queue.send(job.job_id)
+        try:
+            self.queue.send(job.job_id)
+        except Exception:
+            # キューに入らなかったジョブを queued のまま残さない（利用者には 500 が返る. 送り直せばよい）
+            job.status, job.error = JobStatus.FAILED, "受付の途中で失敗しました. もう一度送ってください"
+            with contextlib.suppress(Exception):
+                self.repo.transition(job, expected=JobStatus.QUEUED)
+            raise
         log.info("job submitted", extra={"job_id": job.job_id, "kind": job.kind.value, "bytes": len(data), "owner": owner})
         return job
 

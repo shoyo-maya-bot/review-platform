@@ -94,6 +94,9 @@ class SqliteQueue(_Sqlite):
                 (time.time(), max_messages),
             ).fetchall()
             for mid, job_id, count in rows:
+                if count >= self.max_receive:  # SQS の maxReceiveCount と同じ. 何度も戻るメッセージを退避する
+                    con.execute("UPDATE messages SET dead = 1 WHERE id = ?", (mid,))
+                    continue
                 receipt = f"{mid}:{secrets.token_hex(8)}"
                 con.execute(
                     "UPDATE messages SET visible_at = ?, receive_count = receive_count + 1, receipt = ? WHERE id = ?",
@@ -147,12 +150,14 @@ class SqliteJobRepository(_Sqlite):
             raise NotFound(job_id)
         return Job.from_dict(json.loads(row[0]))
 
-    def transition(self, job: Job, expected: JobStatus) -> None:
+    def transition(self, job: Job, expected: JobStatus, expected_attempts: int | None = None) -> None:
+        sql = "UPDATE jobs SET status = ?, data = ? WHERE job_id = ? AND status = ?"
+        args: tuple = (job.status.value, json.dumps(job.to_dict()), job.job_id, expected.value)
+        if expected_attempts is not None:
+            sql += " AND json_extract(data, '$.attempts') = ?"
+            args += (expected_attempts,)
         with closing(self.connect()) as con:
-            cur = con.execute(
-                "UPDATE jobs SET status = ?, data = ? WHERE job_id = ? AND status = ?",
-                (job.status.value, json.dumps(job.to_dict()), job.job_id, expected.value),
-            )
+            cur = con.execute(sql, args)
             if cur.rowcount != 1:
                 raise Conflict(job.job_id)
 

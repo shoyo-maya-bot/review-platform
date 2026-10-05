@@ -290,7 +290,6 @@ data "aws_iam_policy_document" "dynamodb_endpoint" {
     actions = [
       "dynamodb:GetItem",
       "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
       "dynamodb:Query",
     ]
     resources = [aws_dynamodb_table.jobs.arn, "${aws_dynamodb_table.jobs.arn}/index/owner-job-index"]

@@ -126,9 +126,11 @@ class AzureJobRepository:
     def get(self, job_id: str) -> Job:
         return Job.from_dict(json.loads(self._raw(job_id)["data"]))
 
-    def transition(self, job: Job, expected: JobStatus) -> None:
+    def transition(self, job: Job, expected: JobStatus, expected_attempts: int | None = None) -> None:
         cur = self._raw(job.job_id)
         if cur["status"] != expected.value:
+            raise Conflict(job.job_id)
+        if expected_attempts is not None and int(json.loads(cur["data"]).get("attempts", 0) or 0) != expected_attempts:
             raise Conflict(job.job_id)
         try:
             self.t.update_entity(self._entity(job), mode=UpdateMode.REPLACE, etag=cur.metadata["etag"], match_condition=MatchConditions.IfNotModified)

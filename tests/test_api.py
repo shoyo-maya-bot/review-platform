@@ -67,7 +67,7 @@ def test_submit_rejects_bad_input(client, kwargs, status):
 def test_submit_too_large(client, settings):
     big = b"PK\x03\x04" + b"0" * (settings.max_upload_bytes + 10)
     r = client.post("/v1/jobs", headers=H, files={"file": ("big.xlsx", big)})
-    assert r.status_code in (400, 413)
+    assert r.status_code == 413
 
 
 def test_jobs_are_private_and_report_flow(client, settings, svc):

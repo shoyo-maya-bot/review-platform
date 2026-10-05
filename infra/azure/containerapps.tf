@@ -78,6 +78,8 @@ locals {
 
     RP_HOST = "0.0.0.0"
     RP_PORT = "8080"
+    # アプリには Container Apps の ingress からしか届かないので、X-Forwarded-* を信用する。
+    RP_FORWARDED_ALLOW_IPS = "*"
 
     RP_AUTH         = "jwt"
     RP_JWT_ISSUER   = var.jwt_issuer

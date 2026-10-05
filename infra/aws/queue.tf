@@ -16,7 +16,9 @@ resource "aws_sqs_queue" "jobs" {
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.jobs_dlq.arn
-    maxReceiveCount     = 3
+    # ワーカーのやり直し（MAX_ATTEMPTS = 3）より多くする。同じ値だと、3 回目の途中でタスクが止まったとき、
+    # ワーカーがジョブを failed にする前に SQS が DLQ へ移し、ジョブが running のまま残る。
+    maxReceiveCount = 5
   })
 }
 

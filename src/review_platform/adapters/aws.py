@@ -98,6 +98,7 @@ class DynamoJobRepository:
             "status": {"S": job.status.value},
             "created_at": {"S": job.created_at},
             "expires_at": {"N": str(job.expires_at)},
+            "attempts": {"N": str(job.attempts)},
             "data": {"S": json.dumps(job.to_dict(), ensure_ascii=False)},
         }
 
@@ -116,15 +117,14 @@ class DynamoJobRepository:
             raise NotFound(job_id)
         return Job.from_dict(json.loads(item["data"]["S"]))
 
-    def transition(self, job: Job, expected: JobStatus) -> None:
+    def transition(self, job: Job, expected: JobStatus, expected_attempts: int | None = None) -> None:
+        cond, names, values = "#s = :expected", {"#s": "status"}, {":expected": {"S": expected.value}}
+        if expected_attempts is not None:
+            cond += " AND #a = :attempts"
+            names["#a"] = "attempts"
+            values[":attempts"] = {"N": str(expected_attempts)}
         try:
-            self.ddb.put_item(
-                TableName=self.table,
-                Item=self._item(job),
-                ConditionExpression="#s = :expected",
-                ExpressionAttributeNames={"#s": "status"},
-                ExpressionAttributeValues={":expected": {"S": expected.value}},
-            )
+            self.ddb.put_item(TableName=self.table, Item=self._item(job), ConditionExpression=cond, ExpressionAttributeNames=names, ExpressionAttributeValues=values)
         except ClientError as e:
             if _code(e) == "ConditionalCheckFailedException":
                 raise Conflict(job.job_id) from e
