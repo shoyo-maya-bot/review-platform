@@ -26,14 +26,8 @@ resource "azurerm_container_registry" "this" {
     content {
       default_action = "Deny"
 
-      dynamic "ip_rule" {
-        for_each = var.admin_cidrs
-
-        content {
-          action   = "Allow"
-          ip_range = ip_rule.value
-        }
-      }
+      # ip_rule は「属性としてのブロック」なので、リストで渡す
+      ip_rule = [for cidr in var.admin_cidrs : { action = "Allow", ip_range = cidr }]
     }
   }
 

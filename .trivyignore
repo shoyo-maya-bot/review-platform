@@ -1,1 +1,8 @@
 # trivy の指摘のうち、理由があって受け入れるもの. 1 行 1 ID、理由を必ず書く（docs/SECURITY.md の「既知の妥協」と合わせる）.
+
+# ALB はインターネットから使う API の入口なので公開する（HTTPS だけ・許可した CIDR だけ・アプリで認証）. docs/AWS.md の「既知の妥協」
+AVD-AWS-0053
+# SNS（アラームの通知）は AWS 管理キーでは CloudWatch から送れないため暗号化しない. 中身はアラームの名前だけ. docs/AWS.md の「既知の妥協」
+AVD-AWS-0095
+AWS-0053
+AWS-0095

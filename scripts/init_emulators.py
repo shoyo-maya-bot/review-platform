@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import time
@@ -51,10 +52,8 @@ def azure() -> None:
         lambda: QueueServiceClient.from_connection_string(cs).create_queue(f"{q}-poison"),
         lambda: TableServiceClient.from_connection_string(cs).create_table(os.environ.get("RP_AZURE_TABLE_NAME", "jobs")),
     ):
-        try:
+        with contextlib.suppress(ResourceExistsError):
             fn()
-        except ResourceExistsError:
-            pass
 
 
 if __name__ == "__main__":

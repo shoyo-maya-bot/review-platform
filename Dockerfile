@@ -19,6 +19,8 @@ ENV PATH=/opt/venv/bin:$PATH \
     RP_HOST=0.0.0.0 \
     RP_PORT=8080 \
     RP_DATA_DIR=/data
+# ベースイメージの OS パッケージを最新の修正版にする（脆弱性の修正を取り込む）
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/venv /opt/venv
 # 実行は root ではない利用者（uid 10001）. /tmp は誰でも書ける（ECS・Container Apps で読み取り専用のルートにしても動くように）
 RUN groupadd --gid 10001 app && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app \
