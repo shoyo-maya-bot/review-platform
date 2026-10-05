@@ -154,9 +154,17 @@ resource "aws_dynamodb_table" "jobs" {
   # 名前はアプリ（src/review_platform/adapters/aws.py の OWNER_INDEX）と合わせる.
   global_secondary_index {
     name            = "owner-job-index"
-    hash_key        = "owner"
-    range_key       = "job_id"
     projection_type = "ALL"
+
+    # 6.x では GSI の hash_key・range_key が非推奨. key_schema で書く.
+    key_schema {
+      attribute_name = "owner"
+      key_type       = "HASH"
+    }
+    key_schema {
+      attribute_name = "job_id"
+      key_type       = "RANGE"
+    }
   }
 
   # expires_at（UNIX 秒）を過ぎた項目は DynamoDB が自動で消す。
