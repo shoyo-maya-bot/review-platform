@@ -44,6 +44,23 @@ jobs:
         run: .github/scripts/run.sh pytest -q -rs --cov=review_platform --cov-report=term-missing --cov-fail-under=85
       - name: 依存の脆弱性（pip-audit）
         run: .github/scripts/run.sh pip-audit --skip-editable --progress-spinner off
+      - name: 性能の目安（ローカル実装、LLM は fake. 合否は付けず Job Summary に書く）
+        if: matrix.python == '3.12'
+        run: python scripts/bench_local.py --jobs 100 >> "$GITHUB_STEP_SUMMARY"
+
+  secret-scan:
+    name: 秘密情報の混入検査（gitleaks）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0 # 履歴のすべてを調べる
+          persist-credentials: false
+      - name: gitleaks（すべてのコミット）
+        run: |
+          .github/scripts/run.sh docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.30.1 \
+            git --config .gitleaks.toml --redact --no-banner -v .
 
   test-windows:
     name: test (Windows)

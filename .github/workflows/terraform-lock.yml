@@ -1,0 +1,49 @@
+name: terraform-lock
+
+# Terraform の lock ファイル（.terraform.lock.hcl）を作り直してコミットする.
+# プロバイダーの版の範囲（versions.tf）を変えたときと、手で動かしたときだけ動く.
+# Windows・macOS・Linux のどれで init しても同じ lock になるよう、各 OS のハッシュを入れる.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/*/versions.tf"
+      - ".github/workflows/terraform-lock.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-lock
+  cancel-in-progress: false
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # lock ファイルをコミットするため（このジョブだけ）
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: "1.9.8"
+      - name: lock を作る
+        run: |
+          for d in infra/aws infra/azure; do
+            terraform -chdir="$d" providers lock \
+              -platform=linux_amd64 -platform=linux_arm64 \
+              -platform=windows_amd64 -platform=darwin_amd64 -platform=darwin_arm64
+          done
+      - name: 変わっていればコミット
+        run: |
+          git add infra/*/.terraform.lock.hcl
+          if git diff --cached --quiet; then
+            echo "lock は変わっていません"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: Terraform の lock ファイルを更新"
+          git push

@@ -1,0 +1,10 @@
+# 秘密情報の混入検査（gitleaks）の設定. 既定の規則に、誤検知の除外だけを足す.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "公開されている開発用の値（本物の秘密ではない）"
+regexes = [
+  # Azurite（Azure Storage のエミュレーター）の公開の開発用キー
+  '''Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==''',
+]

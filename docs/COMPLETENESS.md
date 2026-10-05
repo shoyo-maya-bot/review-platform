@@ -11,8 +11,8 @@
 | 受付・状態・結果・一覧の API | `tests/test_api.py` | test (Linux / Windows) |
 | 認証（トークン・JWT・アルゴリズムのすり替え・レート制限） | `tests/test_auth.py` | 同上 |
 | 設定の検査（認証なしはローカルだけ、など） | `tests/test_config_domain.py` | 同上 |
-| ワーカー（条件付き更新・やり直し・失敗の分け方・読めない AI の出力・予算） | `tests/test_worker.py` |
-| 壊れ方（重複配信・処理中の引き継ぎ・やり直しの費用・本文の大きさ・キューの失敗・設定の抜け道） | `tests/test_hardening.py` |
+| ワーカー（条件付き更新・やり直し・失敗の分け方・読めない AI の出力・予算） | `tests/test_worker.py` | 同上 |
+| 壊れ方（重複配信・処理中の引き継ぎ・やり直しの費用・本文の大きさ・キューの失敗・設定の抜け道） | `tests/test_hardening.py` | 同上 |
 | 期限切れのジョブの削除（SQLite・Table） | `tests/test_local.py`・`test_azure.py` | 同上 |
 | MCP（本物の HTTP の上で公式 SDK から 5 つの道具。他人のジョブが見えない・認証なしで 401） | `tests/test_mcp.py` | 同上 |
 | CLI・LLM の再試行とエラー・通知の無害化・ログ | `tests/test_cli_llm_notify.py` | 同上 |
@@ -27,6 +27,10 @@
 | コードの脆弱性 | CodeQL | analyze |
 | 依存の更新 | Dependabot（pip・Actions・Docker・Terraform） | — |
 | Actions の取り違え | すべてコミット SHA で固定 | — |
+| 秘密情報の混入 | gitleaks ですべてのコミットを調べる（除外は `.gitleaks.toml` に理由つき） | 秘密情報の混入検査 |
+| ドキュメントのリンク切れ | `tests/test_docs.py`（README と docs/ の相対リンクと見出し） | test |
+| Terraform のプロバイダーの版 | lock ファイルを `terraform-lock` ワークフローが作ってコミット. `validate` は lock どおりに入れる | terraform-lock・terraform |
+| 性能の目安（受付の応答時間・ワーカーの処理速度） | `scripts/bench_local.py`（100 件、LLM は fake）. 合否は付けず Job Summary に記録 | test (Linux, 3.12) |
 
 ## 人が確かめること（費用・アカウントが要る）
 
@@ -46,8 +50,7 @@
 
 | 項目 | 理由 |
 |---|---|
-| Terraform の lock ファイル（`.terraform.lock.hcl`）をコミットしていない | 作るときの環境（OS）で中身が変わるため. 最初に `terraform init` した人が `terraform providers lock -platform=linux_amd64 -platform=windows_amd64 -platform=darwin_arm64` で作ってコミットするのがおすすめ |
-| 本番の負荷試験 | 学習と小さなチーム向けの作例のため. ローカルの実装（SQLite）は 1 台前提 |
+| 本番の負荷試験 | 学習と小さなチーム向けの作例のため. ローカルの実装（SQLite）は 1 台前提. 目安だけ `scripts/bench_local.py` で測る |
 | 画面（Web UI） | API・MCP・CLI で足りるため |
 
 ## 完成の状態を保つ決まり
