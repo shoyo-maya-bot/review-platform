@@ -11,9 +11,9 @@
 |---|---|---|
 | `RP_BACKEND` | `local` | 保存・キュー・ジョブ管理の実装。`local`（ファイルと SQLite）/ `aws` / `azure` |
 | `RP_LOG_LEVEL` | `INFO` | ログの細かさ。ログは 1 行 1 JSON で標準出力へ |
-| `RP_MAX_UPLOAD_MB` | `10` | 受け付けるファイルの上限 |
+| `RP_MAX_UPLOAD_MB` | `10` | 受け付けるファイルの上限（MB、1〜100） |
 | `RP_ALLOWED_EXTENSIONS` | `.xlsx,.xlsm,.docx,.pptx,.pdf,.md,.diff,.patch` | 受け付ける拡張子 |
-| `RP_JOB_TTL_DAYS` | `30` | ジョブと結果を消すまでの日数（AWS は DynamoDB の TTL、S3・Blob はライフサイクルでも消す） |
+| `RP_JOB_TTL_DAYS` | `30` | ジョブと結果を消すまでの日数（AWS は DynamoDB の TTL、Azure はワーカーが表の行を消す。S3・Blob はライフサイクルでも消す） |
 | `RP_PUBLIC_BASE_URL` | （空） | 結果の URL を通知に載せるときの基準 URL. MCP はこの Host 以外からの要求を断る（DNS リバインディング対策） |
 | `RP_RATE_LIMIT_PER_MINUTE` | `30` | 1 人が 1 分間に送れる件数（API と MCP の POST）. 1 台ごとの数え方 |
 
@@ -41,11 +41,11 @@
 
 | 変数 | 意味 |
 |---|---|
-| `AWS_REGION` | リージョン |
+| `AWS_REGION` | リージョン（なければ `AWS_DEFAULT_REGION`） |
 | `RP_S3_BUCKET` | 原本と結果を置くバケット |
 | `RP_SQS_QUEUE_URL` | ジョブのキュー（デッドレターキューは Terraform 側で設定） |
-| `RP_DDB_TABLE` | ジョブの表（パーティションキー `job_id`（文字列）、TTL 属性 `expires_at`） |
-| `RP_AWS_ENDPOINT_URL` | （任意）エミュレーター（ElasticMQ・DynamoDB Local・S3 互換）に向けるときだけ |
+| `RP_DDB_TABLE` | ジョブの表（パーティションキー `job_id`（文字列）、TTL 属性 `expires_at`（UNIX 秒）、GSI `owner-job-index`（パーティションキー `owner`・ソートキー `job_id`、射影 ALL）。GSI は利用者ごとの一覧に使う。名前はアプリと Terraform で合わせる） |
+| `RP_AWS_ENDPOINT_URL` | （任意）moto サーバーなどのエミュレーターに向けるときだけ（docker compose の `--profile aws` で使う）。S3・SQS・DynamoDB に効く。Bedrock には効かない。クラウドでは使わない |
 
 認証は実行ロール（ECS のタスクロール）。アクセスキーは使いません。
 
@@ -57,9 +57,9 @@
 | `RP_AZURE_QUEUE_URL` | `https://<account>.queue.core.windows.net` |
 | `RP_AZURE_TABLE_URL` | `https://<account>.table.core.windows.net` |
 | `RP_AZURE_CONTAINER` | 原本と結果を置くコンテナ（既定 `review`） |
-| `RP_AZURE_QUEUE_NAME` | ジョブのキュー（既定 `jobs`） |
-| `RP_AZURE_TABLE_NAME` | ジョブの表（既定 `jobs`） |
-| `AZURE_CLIENT_ID` | ユーザー割り当てマネージド ID のクライアント ID（Container Apps が使う） |
+| `RP_AZURE_QUEUE_NAME` | ジョブのキュー（Storage Queue、既定 `jobs`）。何度も失敗したメッセージは `<キュー名>-poison` に移す |
+| `RP_AZURE_TABLE_NAME` | ジョブの表（Table Storage、既定 `jobs`） |
+| `AZURE_CLIENT_ID` | ユーザー割り当てマネージド ID のクライアント ID（アプリの設定ではなく、Azure SDK の `DefaultAzureCredential` が読む） |
 | `RP_AZURE_CONNECTION_STRING` | （任意）Azurite に向けるときだけ。クラウドでは使わない |
 
 認証はマネージド ID（`DefaultAzureCredential`）。

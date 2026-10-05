@@ -10,7 +10,8 @@ review-platform を Azure で動かすための手順と設計です。Terraform
 - **費用を抑える**：使わないときは 0 台まで減らす。高い SKU は変数で選べるようにする。
 - **学びやすい**：1 ファイル 1 テーマ。コメントに「なぜそうするか」を書く。
 
-> `terraform apply` と `terraform destroy` は人が実行します。Terraform のコードはクラウドの API を呼ぶだけで、勝手に動くものはありません。
+> `terraform apply` と `terraform destroy` は、人（利用者）が内容を確かめてから自分で実行します。
+> このドキュメントやツールが自動で実行することはありません。
 
 ## 全体の形
 
@@ -50,7 +51,29 @@ review-platform を Azure で動かすための手順と設計です。Terraform
 | `budget.tf` | 予算（リソースグループ） | 月の費用が 80%・100%（と予測 100%）でメール |
 | `outputs.tf` | 出力 | ACR のログインサーバー、API と MCP の URL など |
 
-Container Apps 環境は、基盤用のリソースグループ `rg-<prefix>-aca-infra` を自動で作ります（ロードバランサーや公開 IP が入ります）。
+Container Apps 環境は、基盤用のリソースグループ `rg-<prefix>-aca-infra` を自動で作ります（ロードバランサーや公開 IP が入ります）。`<prefix>` は `rp-<env>` です。
+
+キューは **Storage Queue**、ジョブの表は **Table Storage** です（Service Bus・Cosmos DB は使いません。理由は [ARCHITECTURE.md](ARCHITECTURE.md)）。
+
+### コンテナに渡す環境変数
+
+| 変数 | 値 |
+|---|---|
+| `RP_BACKEND` | `azure` |
+| `RP_AUTH` | `jwt` |
+| `RP_JWT_ISSUER` / `RP_JWT_AUDIENCE` / `RP_JWT_JWKS_URL` | 変数 `jwt_issuer` / `jwt_audience` / `jwt_jwks_url` から |
+| `RP_AZURE_BLOB_URL` / `RP_AZURE_QUEUE_URL` / `RP_AZURE_TABLE_URL` | ストレージアカウントの各エンドポイント（末尾の `/` なし） |
+| `RP_AZURE_CONTAINER` / `RP_AZURE_QUEUE_NAME` / `RP_AZURE_TABLE_NAME` | `review` / `jobs` / `jobs` |
+| `AZURE_CLIENT_ID` | マネージド ID のクライアント ID（Azure SDK の `DefaultAzureCredential` が読む） |
+| `RP_LLM` / `RP_LLM_BASE_URL` / `RP_LLM_MODEL_STANDARD` / `RP_LLM_MODEL_DEEP` / `RP_BUDGET_PER_JOB_USD` | 変数 `llm_mode` / `llm_base_url` / `llm_model_standard` / `llm_model_deep` / `budget_per_job_usd` から |
+| `RP_NOTIFY` | 変数 `notify` から |
+| `RP_LOG_LEVEL` / `RP_MAX_UPLOAD_MB` / `RP_JOB_TTL_DAYS` | 変数 `log_level` / `max_upload_mb` / `job_ttl_days` から |
+| `RP_PUBLIC_BASE_URL` | `public_base_url`。空なら api の URL（`https://<api の FQDN>`） |
+| `RP_HOST` / `RP_PORT` | `0.0.0.0` / `8080` |
+| `ANTHROPIC_API_KEY` | `llm_mode = "anthropic"` のときだけ、Key Vault の `anthropic-api-key` から |
+| `RP_SLACK_WEBHOOK_URL` | `notify = "slack"` のときだけ、Key Vault の `slack-webhook-url` から |
+
+`RP_ALLOWED_EXTENSIONS` は渡していません（アプリの既定値を使う）。api と worker に同じ値を渡します。
 
 ## 費用の試算（月額の目安）
 
@@ -161,11 +184,14 @@ LOGIN=$(terraform output -raw acr_login_server)
 TAG=<image_tag と同じ値>
 
 az acr login --name "$ACR"
-docker build -t "$LOGIN/review-platform:$TAG" ../..
+# Dockerfile はリポジトリの直下にある（いまは infra/azure にいる）
+docker build --platform linux/amd64 -t "$LOGIN/review-platform:$TAG" ../..
 docker push "$LOGIN/review-platform:$TAG"
 ```
 
-ACR Premium と PE を使う設定では、`admin_cidrs` に入れた端末からだけ push できます。
+- リポジトリ名 `review-platform` は変数 `image_repository` の既定値です。変えたときは合わせます。
+- `terraform output -raw image` で、Container Apps が使うイメージの名前を確かめられます。
+- ACR Premium と PE を使う設定では、`admin_cidrs` に入れた端末からだけ push できます。
 
 ### 3. Key Vault にシークレットを入れる
 
@@ -207,10 +233,13 @@ terraform output api_url
 
 Container App はバージョンなしの ID で参照しています。新しい値は自動で取り直されますが、すぐ反映したいときはリビジョンを再起動します。
 
+アプリ名は `ca-rp-<env>-api` と `ca-rp-<env>-worker` です（`env = "dev"` なら `ca-rp-dev-worker`）。
+
 ```bash
 RG=$(terraform output -raw resource_group_name)
-az containerapp revision restart -g "$RG" -n ca-rp-dev-worker \
-  --revision "$(az containerapp revision list -g "$RG" -n ca-rp-dev-worker --query '[0].name' -o tsv)"
+APP=ca-rp-<env>-worker
+az containerapp revision restart -g "$RG" -n "$APP" \
+  --revision "$(az containerapp revision list -g "$RG" -n "$APP" --query '[0].name' -o tsv)"
 ```
 
 ## 動作の確認
@@ -228,14 +257,16 @@ TOKEN=$(az account get-access-token \
   --scope "api://<APP_ID>/access_as_user" --query accessToken -o tsv)
 
 # MCP の初期化を試す（Streamable HTTP）
-curl -sS "$API/mcp" \
+curl -sS -X POST "$API/mcp" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 ```
 
-`api_min_replicas = 0` のときは、最初の 1 回だけ起動を待つので遅くなります。
+- `<APP_ID>` はアプリ登録のアプリケーション（クライアント）ID です。v2 のトークンでは `aud` がこの ID になり、`RP_JWT_AUDIENCE` と比べられます。
+- `api_min_replicas = 0` のときは、最初の 1 回だけ起動を待つので遅くなります。
+- `public_base_url` を入れたときは、MCP はその Host 以外からの要求を断ります（DNS リバインディング対策）。そのドメインで呼びます。
 
 ### VS Code の MCP
 
@@ -265,8 +296,8 @@ curl -sS "$API/mcp" \
 
 ```bash
 RG=$(terraform output -raw resource_group_name)
-az containerapp logs show -g "$RG" -n ca-rp-dev-api --follow
-az containerapp replica list -g "$RG" -n ca-rp-dev-worker -o table   # キューが積まれると増える
+az containerapp logs show -g "$RG" -n ca-rp-<env>-api --follow
+az containerapp replica list -g "$RG" -n ca-rp-<env>-worker -o table   # キューが積まれると増える
 ```
 
 Log Analytics では次のように探せます。
@@ -284,7 +315,7 @@ ContainerAppConsoleLogs_CL
 terraform destroy    # 人が中身を確かめてから実行する
 ```
 
-- Key Vault は削除保護つきです。消しても 7 日間は同じ名前で作れません。すぐ作り直すなら `name_suffix` を変えます。
+- Key Vault は削除保護つきです。消しても 7 日間は論理削除の状態で残り、完全には消せません（purge できない）。同じ名前で `apply` すると、消した Key Vault が復元されます（`recover_soft_deleted_key_vaults = true`）。まっさらで作り直すなら `name_suffix` を変えます。
 - `prevent_deletion_if_contains_resources = true` なので、手で足したリソースが残っているとリソースグループは消えません。
 - Container Apps 環境の基盤用リソースグループは、環境と一緒に消えます。
 - Entra ID のアプリ登録は手で消します（`az ad app delete --id <APP_ID>`）。
@@ -299,8 +330,8 @@ terraform destroy    # 人が中身を確かめてから実行する
 | ファイルの保存 | S3 | Blob Storage |
 | ジョブのキュー | SQS | Storage Queue |
 | デッドレターキュー | SQS の DLQ（設定だけ） | `jobs-poison`（アプリが移す） |
-| ジョブの表 | DynamoDB（TTL あり） | Table Storage（TTL なし） |
-| 期限切れの削除 | S3 ライフサイクル・DynamoDB TTL | Blob ライフサイクル |
+| ジョブの表 | DynamoDB（TTL あり。GSI `owner-job-index` で利用者ごとの一覧） | Table Storage（TTL なし。一覧は `owner` で絞り込む） |
+| 期限切れの削除 | S3 ライフサイクル・DynamoDB TTL | Blob ライフサイクル・ワーカーが表の行を消す |
 | 実行時の権限 | IAM タスクロール | ユーザー割り当てマネージド ID ＋ RBAC |
 | 秘密情報 | Secrets Manager | Key Vault |
 | イメージ置き場 | ECR | ACR |
@@ -322,7 +353,7 @@ terraform destroy    # 人が中身を確かめてから実行する
 | AZ-104 | 仮想ネットワーク | サブネットの委任、プライベートエンドポイント、プライベート DNS ゾーンと VNet リンク |
 | AZ-104 | 監視 | Log Analytics、診断設定、ログ検索アラート、メトリックアラート、アクショングループ |
 | AZ-305 | ID・ガバナンス・監視の設計 | Entra ID で API を守る設計、ログの保持と取り込み上限、予算の通知 |
-| AZ-305 | データストレージの設計 | Blob・Queue・Table の使い分け、TTL の代わりの手段 |
+| AZ-305 | データストレージの設計 | Blob・Storage Queue・Table Storage の使い分け（Service Bus・Cosmos DB との比較）、TTL の代わりの手段 |
 | AZ-305 | 事業継続の設計 | LRS を選んだ理由（学習用）、論理削除で戻せる範囲 |
 | AZ-305 | インフラの設計 | サーバーレスのコンテナ、キュー駆動の台数増減、閉じたネットワーク、費用と安全のつり合い |
 
@@ -335,7 +366,7 @@ terraform destroy    # 人が中身を確かめてから実行する
 | ストレージを手元から見られない | 公開アクセスを止めている | 閉じたネットワークを優先 | 見るときは VNet の中の踏み台（Bastion など）を使う。急ぎなら一時的に `az storage account update --public-network-access Enabled` と IP 規則を足し、終わったら戻す |
 | コンテナ・キュー・テーブルの作成 | `storage_account_id` を使い、管理プレーン（ARM）で作る。`features.storage.data_plane_available = false` | 公開アクセスを止めても Terraform から作れるように | ー（azurerm 4.77 以上が必要。`queue_properties` や `static_website` は使えない） |
 | Storage Queue に DLQ がない | アプリが `dequeue_count > 5` のメッセージを `jobs-poison` へ移す | サービスにその機能がない | ー |
-| Table Storage に TTL がない | Blob はライフサイクルで消える。テーブルの行は残る | サービスにその機能がない | アプリ側で期限切れの行を消す（定期ジョブなど） |
+| Table Storage に TTL がない | Blob はライフサイクルで消える。テーブルの行は、ワーカーが手すきのとき（1 時間に 1 回まで）に `expires_at` を過ぎたものを消す | サービスにその機能がない | ワーカーが 0 台の間は消えない。確実に消すなら、定期実行のジョブ（Container Apps Jobs など）を足す |
 | KEDA の認証 | `custom_scale_rule` の `identity_id`（マネージド ID）で読む | 共有キーが無効なので接続文字列が使えない | KEDA がキューを読めない（台数が 0 のまま）ときは `worker_min_replicas = 1` にする |
 | Key Vault の参照 | Container Apps が PE 経由でマネージド ID を使って読む | 値を Terraform の状態に残さない | 読めないときは PE と DNS リンク、ロールの割り当て（Secrets User）を確かめる |
 | 送信の通り道 | 環境の既定の送信（固定 IP ではない） | NAT Gateway や Firewall は費用がかかる | NAT Gateway で固定 IP、Azure Firewall で宛先を絞る |

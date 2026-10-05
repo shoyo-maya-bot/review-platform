@@ -302,6 +302,11 @@ variable "max_upload_mb" {
   description = "RP_MAX_UPLOAD_MB。受け付けるファイルの上限（MB）。"
   type        = number
   default     = 10
+
+  validation {
+    condition     = var.max_upload_mb >= 1 && var.max_upload_mb <= 100
+    error_message = "max_upload_mb は 1〜100 にしてください。"
+  }
 }
 
 variable "public_base_url" {

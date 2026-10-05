@@ -5,7 +5,8 @@
 
 環境変数の名前は [CONFIG.md](CONFIG.md) が正です。Terraform はその名前のまま値を渡します。
 
-> `terraform apply` と `terraform destroy` は、必ず人が内容を確かめてから実行してください。
+> `terraform apply` と `terraform destroy` は、人（利用者）が内容を確かめてから自分で実行します。
+> このドキュメントやツールが自動で実行することはありません。
 
 ## 全体の形
 
@@ -31,10 +32,10 @@ AWS のサービスへは VPC エンドポイントで届く。
 | ファイル | 作られるもの | ひとこと |
 |---|---|---|
 | `network.tf` | VPC、パブリック / プライベートサブネット（各 2 AZ）、IGW、ルートテーブル、セキュリティグループ、VPC エンドポイント、フローログ | NAT ゲートウェイは作らない |
-| `network.tf` | ゲートウェイ型エンドポイント: S3、DynamoDB | 無料。エンドポイントポリシーで、このバケットと表だけを通す |
+| `network.tf` | ゲートウェイ型エンドポイント: S3、DynamoDB | 無料。エンドポイントポリシーで、このバケット（と ECR のイメージ層の置き場）、ジョブの表とその GSI だけを通す |
 | `network.tf` | インターフェース型エンドポイント: SQS、ECR（api / dkr）、CloudWatch Logs、STS、Bedrock Runtime、Secrets Manager、Cognito | Bedrock は `llm_provider = bedrock` のとき、Secrets Manager はシークレットを使うときだけ |
 | `storage.tf` | S3 バケット | 公開ブロック、暗号化（SSE-S3 か SSE-KMS）、版管理、TLS 必須、`uploads/` と `results/` を `job_ttl_days` で削除 |
-| `storage.tf` | DynamoDB テーブル | オンデマンド、キー `job_id`、TTL `expires_at`、PITR 有効 |
+| `storage.tf` | DynamoDB テーブル | オンデマンド、パーティションキー `job_id`、GSI `owner-job-index`（`owner` + `job_id`）、TTL `expires_at`、PITR 有効 |
 | `queue.tf` | SQS キューと DLQ | 3 回失敗で DLQ へ。可視性タイムアウト 900 秒。SSE-SQS |
 | `ecr.tf` | ECR リポジトリ | タグ上書き不可、push 時スキャン、最新 20 個を残す |
 | `ecs.tf` | ECS クラスター、タスク定義 × 2、サービス × 2、オートスケーリング | Container Insights 有効。root 以外のユーザー、読み取り専用ルート、`/tmp` だけ書ける |
@@ -43,7 +44,7 @@ AWS のサービスへは VPC エンドポイントで届く。
 | `auth.tf` | Cognito ユーザープール、アプリクライアント、（任意）ドメイン | 自己登録なし、強いパスワード、MFA は変数 |
 | `secrets.tf` | （任意）Secrets Manager のシークレット | 入れ物だけ。値は Terraform の外で入れる |
 | `monitoring.tf` | SNS トピック（メール）、アラーム、ログのメトリクスフィルター | DLQ、ALB / API の 5xx、健全なタスク数、ワーカーの ERROR |
-| `budget.tf` | AWS Budgets | 月の予算。80% と 100% でメール |
+| `budget.tf` | AWS Budgets | 月の予算。実績 80%・実績 100%・予測 100% でメール |
 
 ### コンテナに渡す環境変数
 
@@ -51,9 +52,12 @@ AWS のサービスへは VPC エンドポイントで届く。
 |---|---|
 | `RP_BACKEND` | `aws` |
 | `RP_AUTH` | `jwt` |
-| `RP_JWT_ISSUER` / `RP_JWT_AUDIENCE` / `RP_JWT_JWKS_URL` | Cognito のプールから自動で作る |
+| `RP_JWT_ISSUER` / `RP_JWT_JWKS_URL` | Cognito のプールから自動で作る |
+| `RP_JWT_AUDIENCE` | アプリクライアント ID。Cognito のアクセストークンには `aud` がないので、アプリは `token_use = access` と `client_id` で確かめる |
 | `AWS_REGION` / `RP_S3_BUCKET` / `RP_SQS_QUEUE_URL` / `RP_DDB_TABLE` | 作ったリソースから自動で入れる |
-| `RP_LLM` / `RP_LLM_MODEL_STANDARD` / `RP_LLM_MODEL_DEEP` / `RP_BUDGET_PER_JOB_USD` | 変数から。`RP_LLM_BASE_URL` は `anthropic` のときだけ |
+| `RP_LLM` / `RP_LLM_MODEL_DEEP` / `RP_BUDGET_PER_JOB_USD` | 変数から（`llm_provider` / `llm_model_deep` / `budget_per_job_usd`）。`llm_model_deep` が空なら検証しない |
+| `RP_LLM_MODEL_STANDARD` | `llm_model_standard` を入れたときだけ（空ならアプリの既定値） |
+| `RP_LLM_BASE_URL` | `llm_provider = anthropic` のときだけ（`llm_base_url`） |
 | `RP_NOTIFY` | Slack のシークレットを有効にしたら `slack`、それ以外は `none` |
 | `RP_LOG_LEVEL` / `RP_MAX_UPLOAD_MB` / `RP_ALLOWED_EXTENSIONS` / `RP_JOB_TTL_DAYS` / `RP_PUBLIC_BASE_URL` | 変数から |
 | `RP_HOST` / `RP_PORT` | `0.0.0.0` / `8080` |
@@ -122,6 +126,9 @@ cp terraform.tfvars.example terraform.tfvars
 # terraform.tfvars を編集する（.gitignore に入れておく）
 ```
 
+`image` は手順 3 の `plan` の時点で入力チェックを通る値にしておきます（`<...>` のままだと止まります）。
+ECR の URL は `<account-id>.dkr.ecr.<region>.amazonaws.com/<project_name>-<env>` になるので、push する予定のタグで先に書いておきます。
+
 ### 2. 初期化
 
 ```bash
@@ -149,12 +156,13 @@ TAG=<バージョンやコミット ID。latest は使わない>
 aws ecr get-login-password --region ap-northeast-1 \
   | docker login --username AWS --password-stdin "${REPO%%/*}"
 
-docker build --platform linux/amd64 -t "$REPO:$TAG" .
+# Dockerfile はリポジトリの直下にある（いまは infra/aws にいる）
+docker build --platform linux/amd64 -t "$REPO:$TAG" ../..
 docker push "$REPO:$TAG"
 ```
 
 タグは上書きできません（IMMUTABLE）。作り直すときは新しいタグにします。
-`terraform.tfvars` の `image` を `"$REPO:$TAG"` に合わせます。ARM64 で作るときは `cpu_architecture = "ARM64"` にします。
+`terraform.tfvars` の `image` を `"$REPO:$TAG"` に合わせます。ARM64 で作るときは `--platform linux/arm64` でビルドし、`cpu_architecture = "ARM64"` にします。
 
 ### 5. 全体を作る
 
@@ -215,6 +223,7 @@ TOKEN=$(aws cognito-idp initiate-auth \
 ```
 
 - アクセストークンの有効期限は 60 分です。
+- `--auth-parameters` はカンマ区切りです。パスワードにカンマが入るときは JSON 形式（`--auth-parameters '{"USERNAME":"<user@example.com>","PASSWORD":"<strong-password>"}'`）で渡します。
 - MFA を設定したユーザーは、追加の手順（`respond-to-auth-challenge`）が要ります。
 - 本番では `cognito_allow_user_password_auth = false` にし、ログイン画面（認可コード + PKCE、`cognito_domain_prefix` と `cognito_callback_urls`）を使います。
 
@@ -238,9 +247,11 @@ curl -sS -X POST "$BASE/mcp" \
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/mcp"
 ```
 
+- `public_base_url` を入れたときは、MCP はその Host 以外からの要求を断ります（DNS リバインディング対策）。ALB の DNS 名ではなく、証明書のドメインで呼びます。
+
 ジョブの投入や結果の取得の API は、アプリの API の説明を見てください。どれも `Authorization: Bearer $TOKEN` を付けて呼びます。
 
-ログは次で見られます。
+ログは次で見られます。ロググループ名は `/ecs/<project_name>-<env>/api` と `/ecs/<project_name>-<env>/worker` です（`terraform output log_group_names` で確かめられます）。
 
 ```bash
 aws logs tail "/ecs/review-platform-<env>/api" --follow
@@ -296,7 +307,7 @@ terraform destroy   # 人が内容を確かめて実行する
 | セキュアなアーキテクチャ: データ保護 | S3 の公開ブロック・暗号化（SSE-S3 / SSE-KMS）・TLS 必須のバケットポリシー、Secrets Manager、ACM と ALB の TLS 終端 |
 | セキュアなアーキテクチャ: 認証 | Cognito ユーザープール、JWT（発行者・対象・JWKS）、MFA |
 | 弾力性のあるアーキテクチャ | 2 AZ、ALB のヘルスチェック、SQS による疎結合、DLQ、可視性タイムアウト、ECS のデプロイのサーキットブレーカー |
-| 高性能なアーキテクチャ | SQS の滞留によるステップスケーリング、Fargate、DynamoDB オンデマンド、ロングポーリング |
+| 高性能なアーキテクチャ | SQS の滞留によるステップスケーリング、Fargate、DynamoDB オンデマンドと GSI（`owner-job-index` で利用者ごとの一覧を新しい順に取る）、ロングポーリング |
 | コスト最適化 | NAT を使わない、ワーカー 0 台まで縮小、Fargate Spot（任意）、S3 ライフサイクル、DynamoDB TTL、ECR ライフサイクル、AWS Budgets |
 | 運用 | CloudWatch Logs・メトリクスフィルター・アラーム・SNS、Container Insights、VPC フローログ、PITR |
 
@@ -307,7 +318,7 @@ terraform destroy   # 人が内容を確かめて実行する
 | 項目 | 内容 | 理由 | 本番で強めるなら |
 |---|---|---|---|
 | ALB がインターネット向け | `internal = false` | 利用者がインターネット経由で使うため | `allowed_cidrs` を最小にする。社内からだけなら内部 ALB と VPN / Direct Connect |
-| HTTP（80）のリスナー | 80 を開けている | HTTPS へ転送するためだけ。中身は返さない | 不要なら `alb_http` のルールとリスナーを消す |
+| HTTP（80）のリスナー | 80 を開けている | HTTPS へ転送するためだけ。中身は返さない | 不要なら `aws_vpc_security_group_ingress_rule.alb_http` と `aws_lb_listener.http_redirect` を消す |
 | WAF なし | AWS WAF を付けていない | 費用と、送信元 IP を絞っているため | AWS WAF のマネージドルールを ALB に付ける |
 | ALB のアクセスログなし | 記録していない | ログ用バケットの設定が増えるため | ログ用の S3 バケットを作り `access_logs` を有効にする |
 | S3 のアクセスログなし | サーバーアクセスログを取っていない | 費用と構成を簡単にするため | ログ用バケットか CloudTrail のデータイベント |
@@ -320,7 +331,7 @@ terraform destroy   # 人が内容を確かめて実行する
 | 予算がアカウント全体 | タグで絞っていない | コスト配分タグの有効化が別に要るため | `Project` タグをコスト配分タグにして、予算にフィルターを付ける |
 | USER_PASSWORD_AUTH | 例の tfvars で有効にしている | CLI でトークンを取る学習のため | `false` にして、ログイン画面（認可コード + PKCE）を使う |
 | Cognito の脅威保護なし | 高度なセキュリティ機能を使っていない | 上位の料金プランが要るため | 必要なら有効にする |
-| コンテナのヘルスチェックなし | タスク定義に `healthCheck` がない | イメージに curl などがあるとは限らないため。API は ALB のヘルスチェックで見ている | イメージにチェック用のコマンドを入れ、`healthCheck` を足す |
+| コンテナのヘルスチェックなし | タスク定義に `healthCheck` がない | ECS は Dockerfile の `HEALTHCHECK` を使わない。API は ALB のヘルスチェック（`/healthz`）で見ている | Dockerfile と同じ python のコマンドで、タスク定義に `healthCheck` を足す |
 | ワーカーの Spot | `worker_use_spot = true` だと途中で止まることがある | 安くするための選択肢。既定は false | 止まったジョブは可視性タイムアウト後にやり直し。3 回で DLQ |
 | ログの保存期間 | 既定 30 日 | 費用を抑えるため | 監査の要件に合わせて `log_retention_days` を延ばす |
 
@@ -335,6 +346,7 @@ terraform destroy   # 人が内容を確かめて実行する
 | `allowed_cidrs` | （必須） | ALB に接続してよい CIDR |
 | `acm_certificate_arn` | （必須） | ACM 証明書 |
 | `notification_email` | （必須） | アラームと予算の通知先 |
+| `public_base_url` | 空 | `RP_PUBLIC_BASE_URL`。証明書のドメイン（`https://<your-domain>`）。MCP はこの Host だけを受け付ける |
 | `llm_provider` | `bedrock` | `RP_LLM` |
 | `llm_model_standard` / `llm_model_deep` | 空 | 推論プロファイル ID |
 | `bedrock_model_arns` | `[]` | ワーカーが呼んでよい Bedrock の ARN |

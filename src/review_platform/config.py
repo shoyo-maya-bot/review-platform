@@ -98,7 +98,7 @@ class Settings:
         s = Settings(
             backend=_choice("RP_BACKEND", "local", ("local", "aws", "azure")),
             log_level=_choice("RP_LOG_LEVEL", "INFO", ("debug", "info", "warning", "error")).upper(),
-            max_upload_bytes=_int("RP_MAX_UPLOAD_MB", 10, 1, 200) * 1024 * 1024,
+            max_upload_bytes=_int("RP_MAX_UPLOAD_MB", 10, 1, 100) * 1024 * 1024,
             allowed_extensions=tuple(e.lower() if e.startswith(".") else f".{e.lower()}" for e in _csv("RP_ALLOWED_EXTENSIONS", ",".join(Settings.allowed_extensions))),
             job_ttl_days=_int("RP_JOB_TTL_DAYS", 30, 1, 3650),
             public_base_url=_env("RP_PUBLIC_BASE_URL").rstrip("/"),
