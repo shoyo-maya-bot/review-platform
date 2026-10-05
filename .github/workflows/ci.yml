@@ -93,7 +93,7 @@ jobs:
         with:
           terraform_version: "1.9.8"
       - run: ../../.github/scripts/run.sh terraform fmt -check -recursive
-      - run: ../../.github/scripts/run.sh terraform init -backend=false -input=false
+      - run: ../../.github/scripts/run.sh terraform init -backend=false -input=false -lockfile=readonly
       - run: ../../.github/scripts/run.sh terraform validate -no-color
       - uses: terraform-linters/setup-tflint@90f302c255ef959cbfb4bd10581afecdb7ece3e6 # v4
       - run: ../../.github/scripts/run.sh tflint --format compact
