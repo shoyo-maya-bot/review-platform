@@ -1,7 +1,7 @@
 # 1 つのイメージで API とワーカーの両方を動かす（起動コマンドで役割を変える）.
 #   docker build -t review-platform .
 #   docker run ... review-platform api      /  review-platform worker
-FROM python:3.12-slim-bookworm AS build
+FROM python:3.14-slim-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -10,7 +10,7 @@ COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install ".[aws,azure,tools]"
 
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
