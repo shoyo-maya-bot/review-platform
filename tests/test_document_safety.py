@@ -157,7 +157,7 @@ def test_build_config_uses_prices_of_configured_models():
     cfg = build_config(DEEP, "claude-haiku-4-5-20251001", 1.0)
     assert cfg["models"]["standard"]["id"] == DEEP
     assert (cfg["models"]["standard"]["input_per_mtok"], cfg["models"]["standard"]["output_per_mtok"]) == llm_mod.price_for(DEEP)
-    assert (cfg["models"]["deep"]["input_per_mtok"], cfg["models"]["deep"]["output_per_mtok"]) == llm_mod.price_for("haiku")
+    assert (cfg["models"]["deep"]["input_per_mtok"], cfg["models"]["deep"]["output_per_mtok"]) == llm_mod.price_for("claude-haiku-4-5-20251001") == (1.0, 5.0)
     assert cfg["budget"]["per_pr_usd"] == 1.0
     no_deep = build_config(STD, "", 1.0)
     assert no_deep["escalation"]["verify_must"] is False
@@ -170,7 +170,7 @@ def test_diff_budget_gate_trips_for_expensive_model(monkeypatch):
     assert [c["model"] for c in llm.calls] == [STD, DEEP]
     assert not any("予算" in n for n in out.notes)
 
-    monkeypatch.setitem(llm_mod.PRICES, "ultra", (400.0, 2000.0))
+    monkeypatch.setitem(llm_mod.PRICES, "claude-ultra-1", llm_mod.Price(400.0, 2000.0, 500.0, 40.0))  # 共通の料金表に足す
     llm = FakeLLM([DIFF_MUST, DIFF_VERIFY])
     out = review_diff(DIFF, llm, STD, "claude-ultra-1", budget_usd=1.0)
     assert [c["model"] for c in llm.calls] == [STD]  # 高いモデルの検証は予算で止まる

@@ -36,14 +36,16 @@ def services(s: Settings) -> Services:
 
 
 def llm(s: Settings) -> LLMClient:
+    """LLM の実装. RP_MASK_PII（既定で有効）なら、送る前にメールアドレス・電話番号を伏せる（docs/SECURITY.md）."""
     from .adapters import llm as m
 
+    masker = m.Masker() if s.mask_pii else None
     if s.llm == "anthropic":
-        return m.AnthropicLLM(s.anthropic_api_key, s.llm_base_url)
+        return m.AnthropicLLM(s.anthropic_api_key, s.llm_base_url, masker=masker)
     if s.llm == "bedrock":
-        return m.BedrockLLM(s.aws_region, "")
+        return m.BedrockLLM(s.aws_region, "", masker=masker)
     if s.llm == "fake":
-        return m.FakeLLM()
+        return m.FakeLLM(masker=masker)
     return m.NoLLM()
 
 

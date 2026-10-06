@@ -86,6 +86,35 @@ def test_bedrock_request_shape(monkeypatch):
         llm.complete("m", "s", "u", 1)
 
 
+def test_bedrock_masks_pii_logs_request_id_and_uses_shared_prices(monkeypatch, caplog):
+    import io
+    import json
+    import logging
+
+    from devtools_common.llm import price_for as shared
+
+    from review_platform.adapters.llm import BedrockLLM, Masker
+
+    llm = BedrockLLM(REGION, masker=Masker())
+    sent = {}
+
+    def fake_invoke(**kw):
+        sent.update(kw)
+        body = {"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 1000, "output_tokens": 100}, "stop_reason": "end_turn"}
+        return {"body": io.BytesIO(json.dumps(body).encode()), "ResponseMetadata": {"RequestId": "bedrock-req-1"}}
+
+    monkeypatch.setattr(llm.client, "invoke_model", fake_invoke)
+    caplog.set_level(logging.INFO)
+    model = "apac.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    r = llm.complete(model, "sys a@example.com", "担当 090-1234-5678", 100)
+    req = json.loads(sent["body"])
+    assert "a@example.com" not in req["system"] and "090-1234-5678" not in req["messages"][0]["content"]
+    p = shared("claude-sonnet-4-5")
+    assert r.request_id == "bedrock-req-1" and r.cost_usd == pytest.approx((1000 * p.input + 100 * p.output) / 1e6)
+    rec = next(x.llm for x in caplog.records if getattr(x, "llm", None))
+    assert rec["request_id"] == "bedrock-req-1" and rec["model"] == model
+
+
 def test_factory_builds_aws(monkeypatch):
     from dataclasses import replace
 

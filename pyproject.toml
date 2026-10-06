@@ -17,7 +17,9 @@ dependencies = [
   "pyyaml>=6,<7",
   "mcp>=1.10,<2",
   # 差分のレビュー（振り分け・検証・結果の読み取り）. agent-lab の auto-review をコミット SHA で固定
-  "auto-review @ git+https://github.com/shoyo-maya-bot/agent-lab.git@b0db769aa2175cd0cf52297a8e096d4da024b008#subdirectory=auto-review",
+  "auto-review @ git+https://github.com/shoyo-maya-bot/agent-lab.git@b9c221b291343c8a6db25c2d1c8fbc08e5025533#subdirectory=auto-review",
+  # LLM の呼び出し（再試行・料金表・伏せ字）. devtools-common をコミット SHA で固定（auto-review と同じ SHA にそろえる）
+  "devtools-common @ git+https://github.com/shoyo-maya-bot/devtools-common.git@a10e6e9c925ca31d3164d6b99bd753fad4399327",
 ]
 
 [project.optional-dependencies]

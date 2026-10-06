@@ -74,6 +74,7 @@
 | `RP_LLM_MODEL_STANDARD` | `claude-sonnet-5-5` | ふだんのレビューのモデル。Bedrock では推論プロファイル ID |
 | `RP_LLM_MODEL_DEEP` | `claude-opus-5-5` | 検証に使う上位モデル。空なら検証しない |
 | `RP_BUDGET_PER_JOB_USD` | `1.0` | 1 ジョブの費用の上限. やり直しをまたいで足し上げる（見積もりで超えそうなら上位モデルを省き、ふだんのレビューも超えるなら failed） |
+| `RP_MASK_PII` | `1` | `1`（既定）なら、LLM に送る前に設計書・差分・プロンプトの中のメールアドレスと電話番号（日本の形式。全角・区切りなし・`+81` を含む）を `＊＊＊` に置き換える（`devtools_common.llm.Masker`）。`anthropic`・`bedrock`・`fake` のすべてに効く。`0` で止める（メールアドレスの検査そのものをレビューしたいときなど）。詳しくは [SECURITY.md](SECURITY.md) |
 
 ## 通知
 

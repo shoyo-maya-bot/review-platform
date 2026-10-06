@@ -52,6 +52,7 @@ class LLMReply:
     output_tokens: int
     cost_usd: float
     stop_reason: str = "end_turn"
+    request_id: str = ""  # 窓口が返した request-id（問い合わせ用. 無ければ空）
 
 
 class LLMClient(Protocol):

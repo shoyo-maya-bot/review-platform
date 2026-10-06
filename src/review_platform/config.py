@@ -45,6 +45,15 @@ def _choice(name: str, default: str, choices: tuple[str, ...]) -> str:
     return v
 
 
+def _bool(name: str, default: bool) -> bool:
+    v = _env(name, "1" if default else "0").lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    raise ConfigError(f"{name} は 1 / 0（true / false）で指定してください（{v!r}）")
+
+
 def _csv(name: str, default: str = "") -> tuple[str, ...]:
     return tuple(x.strip() for x in _env(name, default).split(",") if x.strip())
 
@@ -87,6 +96,7 @@ class Settings:
     llm_model_standard: str = "claude-sonnet-5-5"
     llm_model_deep: str = "claude-opus-5-5"
     budget_per_job_usd: float = 1.0
+    mask_pii: bool = True  # LLM に送る前にメールアドレス・電話番号を伏せる
 
     notify: str = "none"
     slack_webhook_url: str = ""
@@ -129,6 +139,7 @@ class Settings:
             llm_model_standard=_env("RP_LLM_MODEL_STANDARD", "claude-sonnet-5-5"),
             llm_model_deep=_env("RP_LLM_MODEL_DEEP", "claude-opus-5-5"),
             budget_per_job_usd=_float("RP_BUDGET_PER_JOB_USD", 1.0),
+            mask_pii=_bool("RP_MASK_PII", True),
             notify=_choice("RP_NOTIFY", "none", ("none", "slack")),
             slack_webhook_url=_env("RP_SLACK_WEBHOOK_URL"),
             host=_env("RP_HOST", "127.0.0.1"),
