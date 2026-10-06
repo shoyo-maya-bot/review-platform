@@ -27,7 +27,7 @@ class _Backend:
         self.llm = llm
         self.name = llm.name
 
-    def call(self, model: dict, system: str, user: str, max_tokens: int) -> Reply:
+    def call(self, model: dict, system: str, user: str, max_tokens: int, role: str = "") -> Reply:  # role は auto-review が渡す（記録の再生用）
         t0 = time.monotonic()
         try:
             r = self.llm.complete(model["id"], system, user, max_tokens)
