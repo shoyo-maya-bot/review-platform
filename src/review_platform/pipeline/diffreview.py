@@ -11,7 +11,7 @@ from auto_review.diff import parse_diff
 from auto_review.review import Reviewer
 from auto_review.router import load_config, plan
 
-from ..adapters.llm import LLMError
+from ..adapters.llm import LLMError, price_for
 from ..ports import LLMClient
 from . import PermanentError, RetryableError
 
@@ -48,15 +48,26 @@ class DiffOutcome:
         return round(sum(c.cost_usd for c in self.calls), 4)
 
 
-def review_diff(diff_text: str, llm: LLMClient, model_standard: str, model_deep: str, budget_usd: float, title: str = "") -> DiffOutcome:
+def _set_model(cfg: dict, key: str, model_id: str) -> None:
+    """モデル ID を差し替え、単価もそのモデルのものにする（router.yaml の単価のままだと見積もりが外れる）."""
+    pin, pout = price_for(model_id)
+    cfg["models"][key].update(id=model_id, input_per_mtok=pin, output_per_mtok=pout)
+
+
+def build_config(model_standard: str, model_deep: str, budget_usd: float) -> dict:
     cfg = load_config()
-    cfg["models"]["standard"]["id"] = model_standard
+    _set_model(cfg, "standard", model_standard)
     if model_deep:
-        cfg["models"]["deep"]["id"] = model_deep
+        _set_model(cfg, "deep", model_deep)
     else:
         cfg["escalation"]["deep_score"] = 10**9  # 上位モデルを使わない
         cfg["escalation"]["verify_must"] = False
     cfg["budget"]["per_pr_usd"] = budget_usd
+    return cfg
+
+
+def review_diff(diff_text: str, llm: LLMClient, model_standard: str, model_deep: str, budget_usd: float, title: str = "") -> DiffOutcome:
+    cfg = build_config(model_standard, model_deep, budget_usd)
     changes = parse_diff(diff_text)
     if not changes:
         raise PermanentError("差分にファイルの変更がありません")
