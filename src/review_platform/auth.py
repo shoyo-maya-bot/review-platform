@@ -1,7 +1,9 @@
 """API と MCP の認証（ASGI ミドルウェア）. 認証した利用者を scope["state"]["principal"] に入れる.
 
 - token: Authorization: Bearer <token>. サーバーはトークンの SHA-256 だけを持つ
-- jwt  : Cognito / Entra ID の JWT（RS256）. aud が無い Cognito のアクセストークンは client_id で確かめる
+- jwt  : Cognito / Entra ID の JWT（RS256）. aud が無い Cognito のアクセストークンは client_id で確かめる.
+         JWKS の取得は同期の通信なので、検証はスレッドプールで行う（イベントループを止めない）.
+         知らない kid のトークンが来ても、JWKS の取り直しは JWKS_MIN_REFRESH_SECONDS に 1 回まで（取り直しの連打で窓口を叩かない）
 - none : ローカルの試験だけ（config.py が 127.0.0.1 以外では起動させない）
 """
 
@@ -10,10 +12,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import threading
 import time
 from collections import defaultdict, deque
 
 import jwt
+from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .config import Settings
@@ -37,15 +41,48 @@ class TokenVerifier:
         raise AuthError("invalid token")
 
 
+JWKS_MIN_REFRESH_SECONDS = 60.0
+
+
 class JwtVerifier:
-    def __init__(self, issuer: str, audience: str, jwks_url: str, jwks_client: jwt.PyJWKClient | None = None):
+    def __init__(
+        self,
+        issuer: str,
+        audience: str,
+        jwks_url: str,
+        jwks_client: jwt.PyJWKClient | None = None,
+        min_refresh_seconds: float = JWKS_MIN_REFRESH_SECONDS,
+        clock=time.monotonic,
+    ):
         self.issuer = issuer
         self.audience = audience
         self.jwks = jwks_client or jwt.PyJWKClient(jwks_url, cache_keys=True, lifespan=3600, timeout=10)
+        self.min_refresh_seconds = min_refresh_seconds
+        self._clock = clock
+        self._last_refresh: float | None = None
+        self._lock = threading.Lock()
+
+    def _signing_key(self, token: str):
+        """kid に合う鍵. 手元の一覧に無ければ取り直すが、取り直しは min_refresh_seconds に 1 回まで."""
+        kid = jwt.get_unverified_header(token).get("kid")
+        if not kid:
+            raise AuthError("invalid jwt: no kid")
+        for k in self.jwks.get_signing_keys():
+            if k.key_id == kid:
+                return k.key
+        with self._lock:
+            now = self._clock()
+            if self._last_refresh is not None and now - self._last_refresh < self.min_refresh_seconds:
+                raise AuthError("invalid jwt: unknown kid")
+            self._last_refresh = now
+        for k in self.jwks.get_signing_keys(refresh=True):
+            if k.key_id == kid:
+                return k.key
+        raise AuthError("invalid jwt: unknown kid")
 
     def verify(self, token: str) -> str:
         try:
-            key = self.jwks.get_signing_key_from_jwt(token).key
+            key = self._signing_key(token)
             claims = jwt.decode(
                 token,
                 key,
@@ -111,7 +148,8 @@ class AuthMiddleware:
                 await _json(send, 401, {"error": "unauthorized", "message": "Authorization: Bearer <token> が必要です"}, [(b"www-authenticate", b"Bearer")])
                 return
             try:
-                principal = self.verifier.verify(token.strip())
+                # JWT の検証は JWKS の同期の通信（最大 10 秒）を含みうるので、スレッドプールで行う
+                principal = await run_in_threadpool(self.verifier.verify, token.strip())
             except AuthError:
                 await _json(send, 401, {"error": "unauthorized", "message": "トークンが無効です"}, [(b"www-authenticate", b'Bearer error="invalid_token"')])
                 return
