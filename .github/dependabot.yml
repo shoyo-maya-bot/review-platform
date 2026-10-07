@@ -7,9 +7,9 @@ updates:
     groups:
       python: { patterns: ["*"] }
     ignore:
-      # mcp 2.x は FastMCP が無くなる（MCPServer へ改名）ため、移行は手作業で行う
+      # mcp の次の大きな版（3.x）は API が変わりうるため、移行は手作業で行う
       - dependency-name: mcp
-        versions: [">=2"]
+        versions: [">=3"]
   - package-ecosystem: docker
     directory: /
     schedule: { interval: monthly }

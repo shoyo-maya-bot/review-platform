@@ -183,12 +183,12 @@ def create_app(settings: Settings, services: Services, verifier=None, mcp_enable
 
     lifespan = None
     if mcp_enabled:
-        from mcp.server.fastmcp.server import StreamableHTTPASGIApp
+        from mcp.server.streamable_http_manager import StreamableHTTPASGIApp
 
-        from .mcp_server import build_mcp
+        from .mcp_server import build_mcp, http_options
 
         mcp = build_mcp(s, services)
-        mcp.streamable_http_app()  # セッションマネージャを作る
+        mcp.streamable_http_app(**http_options(s, limit))  # セッションマネージャを作る（通信の設定はここで渡す）
         routes.append(Route("/mcp", StreamableHTTPASGIApp(mcp.session_manager), methods=["GET", "POST", "DELETE"]))
 
         @contextlib.asynccontextmanager

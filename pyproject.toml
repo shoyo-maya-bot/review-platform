@@ -15,7 +15,7 @@ dependencies = [
   "httpx>=0.27,<1",
   "pyjwt[crypto]>=2.8,<3",
   "pyyaml>=6,<7",
-  "mcp>=1.10,<2",
+  "mcp>=2,<3",
   # 差分のレビュー（振り分け・検証・結果の読み取り）. agent-lab の auto-review をコミット SHA で固定
   "auto-review @ git+https://github.com/shoyo-maya-bot/agent-lab.git@b9c221b291343c8a6db25c2d1c8fbc08e5025533#subdirectory=auto-review",
   # LLM の呼び出し（再試行・料金表・伏せ字）. devtools-common をコミット SHA で固定（auto-review と同じ SHA にそろえる）
@@ -41,7 +41,6 @@ review_platform = ["prompts/*.md"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
-filterwarnings = ["ignore:Use `streamable_http_client` instead:DeprecationWarning"]
 markers = [
   "aws: moto で AWS の実装を試す（boto3 と moto が要る）",
   "azure: Azurite で Azure の実装を試す（RP_TEST_AZURITE に接続文字列）",
