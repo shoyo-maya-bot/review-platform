@@ -24,7 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12"]
+        # 3.14 はコンテナのイメージ（Dockerfile）と同じ版. イメージで動く版を必ずテストする
+        python: ["3.11", "3.12", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,7 +39,11 @@ jobs:
             mcr.microsoft.com/azure-storage/azurite:3.35.0 \
             azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
       - run: python -m pip install --upgrade pip setuptools
-      - run: pip install -e ".[aws,azure,dev]" pip-audit
+      - name: 依存を入れる（constraints.txt があれば版をそろえる。ツールの版は固定）
+        run: |
+          C=""; [ -f constraints.txt ] && C="-c constraints.txt"
+          pip install $C -e ".[aws,azure,dev]"
+          pip install "pip-audit==2.9.0" "bandit==1.8.6"
       - run: .github/scripts/run.sh bash -c "ruff check . && ruff format --check ."
       - name: pytest（moto で AWS、Azurite で Azure を含む）
         env:
@@ -46,6 +51,8 @@ jobs:
         run: .github/scripts/run.sh pytest -q -rs --cov=review_platform --cov-report=term-missing --cov-fail-under=85
       - name: 依存の脆弱性（pip-audit）
         run: .github/scripts/run.sh pip-audit --skip-editable --progress-spinner off
+      - name: SAST（bandit. 中以上）
+        run: .github/scripts/run.sh bandit -q -r src -ll
       - name: 性能の目安（ローカル実装、LLM は fake. 合否は付けず Job Summary に書く）
         if: matrix.python == '3.12'
         run: python scripts/bench_local.py --jobs 100 >> "$GITHUB_STEP_SUMMARY"
@@ -74,7 +81,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - run: pip install -e ".[aws,dev]"
+      - name: 依存を入れる（constraints.txt があれば版をそろえる）
+        shell: bash
+        run: |
+          C=""; [ -f constraints.txt ] && C="-c constraints.txt"
+          pip install $C -e ".[aws,dev]"
       - run: bash .github/scripts/run.sh pytest -q -rs
 
   terraform:
@@ -135,7 +146,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - run: pip install -e .
+      - run: |
+          C=""; [ -f constraints.txt ] && C="-c constraints.txt"
+          pip install $C -e .
       - run: scripts/e2e.sh ${{ matrix.profile }}
       - if: failure()
         run: tail -200 e2e-${{ matrix.profile }}.log | sed 's/^/::error::/' | tail -60

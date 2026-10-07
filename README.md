@@ -45,6 +45,33 @@ docker compose --profile local up -d --build
 review-platform submit samples/member-api-design.xlsx --token <表示されたトークン> --wait
 ```
 
+### Windows（PowerShell）で試す
+
+Docker を使わず、API とワーカーを 2 つの PowerShell で動かします（保存先はローカルのフォルダ `.rp-data`）。
+Excel・Word などの変換には doc2md が要るので、まず Markdown の設計書（`samples/member-api-design.md`）と差分（`samples/change.diff`）で試します。
+
+```powershell
+git clone https://github.com/shoyo-maya-bot/review-platform.git; cd review-platform
+py -3.12 -m venv .venv; .\.venv\Scripts\Activate.ps1
+pip install -e .                      # 変換も試すなら pip install -e ".[tools]"
+review-platform token                 # トークンと SHA-256 が表示される
+$env:RP_API_TOKENS_SHA256 = "<表示された SHA-256>"; $env:RP_LLM = "fake"
+review-platform api                   # 1 つ目の PowerShell（http://127.0.0.1:8080）
+```
+
+```powershell
+# 2 つ目の PowerShell（同じフォルダで .\.venv\Scripts\Activate.ps1 のあと、上と同じ環境変数を入れる）
+$env:RP_API_TOKENS_SHA256 = "<表示された SHA-256>"; $env:RP_LLM = "fake"
+review-platform worker
+```
+
+```powershell
+# 3 つ目の PowerShell（送る側）
+$env:RP_TOKEN = "<表示されたトークン>"
+review-platform submit samples\member-api-design.md --wait
+review-platform submit samples\change.diff --wait
+```
+
 本物の AI でレビューするときは、`.env` を `RP_LLM=anthropic` と `ANTHROPIC_API_KEY=...` にして起動し直します（費用がかかります。1 件あたりの上限は `RP_BUDGET_PER_JOB_USD`）。
 AWS・Azure の実装をローカルで試すときは、`--profile aws`（moto サーバー）か `--profile azure`（Azurite）で起動します。
 
@@ -105,11 +132,32 @@ Copilot Chat（エージェントモード）で「samples/member-api-design.md 
 ## 開発
 
 ```bash
-pip install -e ".[aws,azure,dev]"
+pip install -c constraints.txt -e ".[aws,azure,dev]"   # constraints.txt は CI（deps-lock）が作る版の固定. 無ければ -c を外す
 ruff check . && ruff format --check .
 pytest -q                          # Azure の試験は RP_TEST_AZURITE（Azurite の接続文字列）があるときだけ
 scripts/e2e.sh local               # docker compose で通しの試験（aws・azure も）
 ```
+
+Windows（PowerShell）:
+
+```powershell
+py -3.12 -m venv .venv; .\.venv\Scripts\Activate.ps1
+pip install -c constraints.txt -e ".[aws,dev]"
+ruff check .; ruff format --check .
+pytest -q                          # e2e（docker compose）は bash と Docker が要るので、WSL か CI で流す
+```
+
+CI は Linux（Python 3.11・3.12・3.14. イメージは 3.14）と Windows（3.12）でテストし、bandit・pip-audit・gitleaks・trivy も流します。
+
+## 変更点
+
+- **AI の出力をスキーマで検証する**（2026-10-07）. 壊れた JSON（末尾のカンマなど）・`findings` という語を含むだけの文章・形の違う JSON
+  （題名や重要度の無い指摘を含む）は、これまで「指摘 0 件の成功」になることがあったが、いまはジョブを **失敗**（「AI の出力を読めませんでした」）にする.
+  上位モデルの検証の出力が読めないときは、一次の結果を「未検証」として出し、注記を残す
+- **LLM の窓口（`ports.LLMClient.complete`）に `schema` 引数を足した**. Messages API・Bedrock は道具の強制で構造化出力にする. 独自の窓口を実装している場合は `schema=None` を受けるようにする
+- **重要度の読み替え**は auto-review の表（`auto_review.findings.SEVERITY_ALIASES`）だけを使う. これまで review-platform だけの表で「読めない」としていた `P0`〜`P3` などは、auto-review と同じく読み替える
+- **トークンの見積もり**: 日本語など ASCII 以外は 1 文字 1 トークンで数える（これまでは 3 文字で 1 トークン）. 日本語の長い文書は、予算の確認で止まりやすくなる
+- **doc2md の子プロセス**には、決まった環境変数（PATH・HOME・TEMP・LANG・DEVTOOLS_* など）だけを渡す. API キーなどは渡さない
 
 ## セキュリティ・ライセンス
 

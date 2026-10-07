@@ -1,0 +1,56 @@
+# 依存の版を固定する constraints.txt を作る（作業する環境から PyPI に届かないことがあるので、GitHub Actions に作らせる）.
+#
+# - main 以外のブランチで pyproject.toml（またはこのファイル）を変えて push したとき、または手で動かしたときに走る
+# - pyproject.toml（aws・azure・dev の extra を含む）から、uv（版を固定）で Windows・Linux の両方に効く constraints.txt を作る
+# - tools の extra（doc2md）は別の venv に入れる前提（devtools-common の版がぶつかる）なので含めない
+# - git の URL で入れる依存（auto-review・devtools-common）は constraints に書けない（pip が受け付けない）ので除く. 版は pyproject.toml の SHA で固定済み
+# - 変わっていれば同じブランチにコミットして push する. GITHUB_TOKEN のコミットでは CI が走らないので、次の変更を push して CI を回す
+name: deps-lock
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+    paths:
+      - pyproject.toml
+      - .github/workflows/deps-lock.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deps-lock-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # このジョブだけ書き込みが要る（constraints.txt をブランチにコミットして push するため）
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # push するために認証情報を残す（このジョブは外部のコードを動かさない. 入れるのは版を固定した uv だけ）
+          persist-credentials: true
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install "uv==0.8.17"
+      - name: constraints.txt を作る
+        run: |
+          uv pip compile pyproject.toml --extra aws --extra azure --extra dev \
+            --universal --python-version 3.11 \
+            --no-emit-package auto-review --no-emit-package devtools-common \
+            --no-header --no-annotate -o constraints.txt
+          sed -i '1i # 自動生成（.github/workflows/deps-lock.yml）. 手で書き換えない. pip install -c constraints.txt で使う' constraints.txt
+          cat constraints.txt
+      - name: 変わっていればコミットして push する
+        run: |
+          git add constraints.txt
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "依存: constraints.txt を更新（deps-lock）"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
