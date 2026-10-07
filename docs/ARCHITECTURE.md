@@ -71,4 +71,4 @@ stateDiagram-v2
 - ローカルの実装（SQLite）は 1 台の PC で API とワーカーを動かす前提。本番の負荷には向かない
 - 利用者ごとの一覧は、Azure（Table Storage）では表を絞り込む方式で、件数が多いと遅くなる（多くなったら索引用の行を足す）
 - 変換は doc2md の範囲（方眼紙の Excel・画像の中の文字などは苦手）。LibreOffice・Tesseract はイメージに入れていない（大きくなるため）
-- doc2md はイメージの中の別の venv（`/opt/doc2md`。版は Dockerfile の `DOC2MD_REF`）に入れ、別プロセスで呼ぶ。doc-to-markdown と auto-review が固定している devtools-common の版が違っても、ぶつからないようにするため。ローカルで設計書を変換するときは `pipx install "doc-to-markdown @ git+https://github.com/shoyo-maya-bot/doc-to-markdown.git@<SHA>"` のように別に入れる
+- doc2md はイメージの中の別の venv（`/opt/doc2md`。版は Dockerfile の `DOC2MD_REF`）に入れ、別プロセスで呼ぶ。doc-to-markdown と auto-review が固定している devtools-common の版が違っても、ぶつからないようにするため。ローカルで設計書を変換するときは `pip install -e ".[tools]"` で同じ venv に入れられる（doc-to-markdown・auto-review・このパッケージの devtools-common の固定 SHA をそろえてあるため。版は `tools` と `DOC2MD_REF` で同じ SHA にし、tests/test_pins.py が確かめる）

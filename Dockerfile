@@ -13,7 +13,8 @@ COPY src ./src
 RUN pip install ".[aws,azure]" && pip uninstall -y pip
 # 設計書の変換ツール（doc2md）は別の venv に入れる. ワーカーは別プロセスで呼ぶだけなので、doc-to-markdown が固定している
 # devtools-common の版がこのパッケージ（auto-review と同じ版）と違ってもぶつからない. 版はコミット SHA で固定する
-ARG DOC2MD_REF=56a049a43d2c34d7c17183e59555f2e81f7288b8
+# （pyproject.toml の tools と同じ SHA にする. tests/test_pins.py が確かめる）
+ARG DOC2MD_REF=515dbeb7f702ce0cbe8f7c8d497e55585ead9555
 RUN python -m venv /opt/doc2md \
     && /opt/doc2md/bin/pip install "doc-to-markdown @ git+https://github.com/shoyo-maya-bot/doc-to-markdown.git@${DOC2MD_REF}" \
     && /opt/doc2md/bin/pip uninstall -y pip \
