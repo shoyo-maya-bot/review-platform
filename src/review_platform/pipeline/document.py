@@ -7,7 +7,20 @@ import re
 from dataclasses import dataclass, field
 from importlib import resources
 
-from auto_review.findings import Finding, _json_blocks, apply_verdicts, merge, ordered, parse_findings, parse_verdicts
+from auto_review.findings import (
+    FINDINGS_SCHEMA,
+    VERDICTS_SCHEMA,
+    Finding,
+    UnreadableOutput,
+    apply_verdicts,
+    findings_from_data,
+    load_output,
+    merge,
+    norm_severity,
+    ordered,
+    verdicts_from_data,
+)
+from auto_review.tokens import estimate_tokens
 
 from ..adapters.llm import LLMError, cost
 from ..ports import LLMClient
@@ -15,7 +28,7 @@ from . import PermanentError, RetryableError
 
 log = logging.getLogger(__name__)
 
-CHARS_PER_TOKEN = 3.0
+CHARS_PER_TOKEN = 3.0  # ASCII（英数字・記号）の何文字で 1 トークンか. ASCII 以外は 1 文字 1 トークンで数える（estimate_input_tokens）
 MAX_DOC_CHARS = 180_000  # 約 6 万トークン. 超えた分は省き、その旨を結果に書く
 OUTPUT_TOKENS = {"standard": 4000, "verify": 3000}
 MAX_FINDINGS = 20
@@ -68,53 +81,35 @@ def wrap_findings(findings: list[Finding]) -> str:
     return f"<findings>\n{neutralize(listing)}\n</findings>"
 
 
-# モデルが決まった 4 種以外の重要度を返したときの読み替え. 知らない値は下げずに MUST として扱い、要確認の印を付ける
-SEVERITY_SYNONYMS = {
-    "MUST": "MUST", "CRITICAL": "MUST", "BLOCKER": "MUST", "BLOCKING": "MUST", "HIGH": "MUST", "MAJOR": "MUST",
-    "SEVERE": "MUST", "ERROR": "MUST", "必須": "MUST", "重大": "MUST", "高": "MUST",
-    "WANT": "WANT", "SHOULD": "WANT", "MEDIUM": "WANT", "MODERATE": "WANT", "WARNING": "WANT", "WARN": "WANT",
-    "推奨": "WANT", "中": "WANT",
-    "NITS": "NITS", "NIT": "NITS", "NITPICK": "NITS", "MINOR": "NITS", "LOW": "NITS", "TRIVIAL": "NITS",
-    "INFO": "NITS", "STYLE": "NITS", "軽微": "NITS", "低": "NITS",
-    "Q": "Q", "QUESTION": "Q", "QUERY": "Q", "質問": "Q", "確認": "Q",
-}  # fmt: skip
 UNKNOWN_SEVERITY_NOTE = "要確認: AI が想定外の重要度「{raw}」を返したため、MUST として扱いました"
 
 
 def normalize_severity(raw: object) -> str | None:
-    """重要度を MUST / WANT / NITS / Q に読み替える. 読めない値は None（呼び出し側で要確認にする）."""
-    key = str(raw or "").strip().upper()
-    return SEVERITY_SYNONYMS.get(key)
+    """重要度を MUST / WANT / NITS / Q に読み替える. 読めない値は None（呼び出し側で要確認にする）.
 
-
-def _raw_items(text: str) -> list[dict]:
-    """parse_findings と同じ順で、モデルが返した指摘の生の dict を取り出す（id の番号と対応する）."""
-    items: list[dict] = []
-    for data in _json_blocks(text):
-        if isinstance(data, dict):
-            data = data.get("findings", [])
-        if isinstance(data, list):
-            items += [x for x in data if isinstance(x, dict)]
-    return items
+    読み替えの表は auto-review（`auto_review.findings.SEVERITY_ALIASES`）の 1 か所だけに置き、ここでは持たない.
+    """
+    sev, known = norm_severity(raw)
+    return sev if known else None
 
 
 def parse_document_findings(text: str, model: str, prefix: str) -> tuple[list[Finding], dict[str, str]]:
-    """指摘を読み、重要度を読み替える. auto-review の既定は知らない重要度を黙って WANT に下げるので、ここで上書きする."""
-    found = parse_findings(text, model, prefix)
-    raw = _raw_items(text)
+    """一次レビューの出力をスキーマで検証して読み、（指摘, 読めない重要度 {id: 元の値}）を返す.
+
+    JSON が無い・壊れている・スキーマに合わないときは UnreadableOutput（黙って指摘 0 件にしない）.
+    """
+    items = load_output(text, FINDINGS_SCHEMA)["findings"]
+    return _with_unknown(items, findings_from_data(items, model, prefix))
+
+
+def _with_unknown(items: list[dict], found: list[Finding]) -> tuple[list[Finding], dict[str, str]]:
     unknown: dict[str, str] = {}
-    for f in found:
-        i = int(f.id[len(prefix) :]) - 1
-        value = raw[i].get("severity") if 0 <= i < len(raw) else None
-        sev = normalize_severity(value)
-        if sev is None:
-            shown = str(value or "（空）").strip() or "（空）"
-            f.severity = "MUST"
-            f.status = "uncertain"
+    for x, f in zip(items, found, strict=True):
+        if normalize_severity(x.get("severity")) is None:
+            shown = str(x.get("severity") or "").strip() or "（空）"
+            f.severity, f.status = "MUST", "uncertain"
             f.verdict_note = UNKNOWN_SEVERITY_NOTE.format(raw=shown)
             unknown[f.id] = shown
-        else:
-            f.severity = sev
     return found, unknown
 
 
@@ -130,8 +125,16 @@ def _normalize_verdicts(verdicts: dict[str, dict]) -> dict[str, dict]:
     return verdicts
 
 
-def _estimate(model: str, chars: int, out_tokens: int) -> float:
-    return cost(model, int(chars / CHARS_PER_TOKEN) + 1, out_tokens)
+def estimate_input_tokens(text: str) -> int:
+    """入力トークンの見積もり. 日本語など ASCII 以外は 1 文字 1 トークン、ASCII は CHARS_PER_TOKEN 文字で 1 トークン.
+
+    設計書は日本語が多く、全体を「3 文字で 1 トークン」で数えると 2〜3 倍少なく見積もって予算の確認が甘くなるため.
+    """
+    return estimate_tokens(text, CHARS_PER_TOKEN)
+
+
+def _estimate(model: str, text: str, out_tokens: int) -> float:
+    return cost(model, estimate_input_tokens(text), out_tokens)
 
 
 class DocumentReviewer:
@@ -142,8 +145,11 @@ class DocumentReviewer:
         self.budget = budget_usd
 
     def _call(self, step: str, model: str, system: str, user: str, out: ReviewOutcome) -> str:
+        """モデルを呼ぶ. スキーマを渡し、対応する窓口（Messages API・Bedrock）では道具の強制で構造化出力にする.
+        どちらの場合も、受け取った側でスキーマを検証する（parse_document_findings / _parse_verification）."""
+        schema = VERDICTS_SCHEMA if step == "verify" else FINDINGS_SCHEMA
         try:
-            r = self.llm.complete(model, system, user, OUTPUT_TOKENS[step])
+            r = self.llm.complete(model, system, user, OUTPUT_TOKENS[step], schema=schema)
         except LLMError as e:
             raise (RetryableError if e.retryable else PermanentError)(str(e)) from e
         out.calls.append(Call(step, model, r.input_tokens, r.output_tokens, round(r.cost_usd, 4)))
@@ -156,12 +162,14 @@ class DocumentReviewer:
             markdown = markdown[:MAX_DOC_CHARS]
         system = _prompt("design-review.md", MAX_FINDINGS)
         user = wrap_document(name, markdown)
-        if _estimate(self.std, len(system) + len(user), OUTPUT_TOKENS["standard"]) > self.budget:
+        if _estimate(self.std, system + user, OUTPUT_TOKENS["standard"]) > self.budget:
             raise PermanentError(f"見積もりが 1 ジョブの上限 ${self.budget:.2f} を超えます（文書を分けるか RP_BUDGET_PER_JOB_USD を見直してください）")
         text = self._call("standard", self.std, system, user, out)
-        found, unknown = parse_document_findings(text, self.std, "s")
-        if not found and "findings" not in text:
-            raise PermanentError("AI の出力を読めませんでした（JSON がありません）")
+        try:
+            found, unknown = parse_document_findings(text, self.std, "s")
+        except UnreadableOutput as e:
+            # 壊れた JSON・形の違う出力を「指摘 0 件」にしない. ジョブを失敗にして理由を見せる
+            raise PermanentError(f"AI の出力を読めませんでした（{e}）") from e
         if unknown:
             out.notes.append(f"要確認: AI が想定外の重要度を返した指摘が {len(unknown)} 件あります（MUST として扱いました）")
 
@@ -169,7 +177,7 @@ class DocumentReviewer:
         if musts and self.deep:
             vsys = _prompt("design-verify.md", 3)
             vuser = user + "\n\n## 一次レビューの指摘（データ）\n\n" + wrap_findings(musts[:8])
-            if out.cost_usd + _estimate(self.deep, len(vsys) + len(vuser), OUTPUT_TOKENS["verify"]) > self.budget:
+            if out.cost_usd + _estimate(self.deep, vsys + vuser, OUTPUT_TOKENS["verify"]) > self.budget:
                 out.notes.append(f"予算 ${self.budget:.2f} を超える見込みのため、上位モデルの検証を省きました")
             else:
                 try:
@@ -177,8 +185,14 @@ class DocumentReviewer:
                 except RetryableError as e:
                     out.notes.append(f"上位モデルの検証に失敗したため、一次の結果だけを出します（{e}）")
                 else:
-                    apply_verdicts(found, _normalize_verdicts(parse_verdicts(vtext)), self.deep)
-                    extra, extra_unknown = parse_document_findings(vtext, self.deep, "d")
+                    try:
+                        verdicts, extra, extra_unknown = _parse_verification(vtext, self.deep)
+                    except UnreadableOutput as e:
+                        # 検証役の出力が読めないときは、一次の結果を検証なしとして出し、その旨を残す（黙って検証済みにしない）
+                        out.notes.append(f"上位モデルの検証の出力を読めなかったため、一次の結果だけを出します（{e}）")
+                        out.findings = ordered(found)
+                        return out
+                    apply_verdicts(found, _normalize_verdicts(verdicts), self.deep)
                     found = merge(found, extra)
                     if extra_unknown:
                         out.notes.append(f"要確認: 上位モデルが想定外の重要度を返した指摘が {len(extra_unknown)} 件あります（MUST として扱いました）")
@@ -191,4 +205,22 @@ class DocumentReviewer:
         return out
 
 
-__all__ = ["DocumentReviewer", "Finding", "ReviewOutcome", "neutralize", "normalize_severity", "parse_document_findings", "wrap_document", "wrap_findings"]
+def _parse_verification(text: str, model: str) -> tuple[dict[str, dict], list[Finding], dict[str, str]]:
+    """検証役の出力をスキーマで検証して読む. 読めなければ UnreadableOutput."""
+    data = load_output(text, VERDICTS_SCHEMA)
+    items = data.get("findings", [])
+    extra, unknown = _with_unknown(items, findings_from_data(items, model, "d"))
+    return verdicts_from_data(data["verdicts"]), extra, unknown
+
+
+__all__ = [
+    "DocumentReviewer",
+    "Finding",
+    "ReviewOutcome",
+    "estimate_input_tokens",
+    "neutralize",
+    "normalize_severity",
+    "parse_document_findings",
+    "wrap_document",
+    "wrap_findings",
+]

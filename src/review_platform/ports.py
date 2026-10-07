@@ -58,7 +58,9 @@ class LLMReply:
 class LLMClient(Protocol):
     name: str
 
-    def complete(self, model: str, system: str, user: str, max_tokens: int) -> LLMReply: ...
+    # schema を渡すと、対応する窓口は「そのスキーマを入力にした道具」を強制して構造化出力にし、道具の入力を JSON の文字列で text に返す.
+    # 対応しない窓口は普通の文章を返す. どちらの場合も、受け取った側でスキーマを検証する
+    def complete(self, model: str, system: str, user: str, max_tokens: int, schema: dict | None = None) -> LLMReply: ...
 
 
 class Notifier(Protocol):

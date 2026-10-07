@@ -6,6 +6,8 @@
 - 一時的な失敗はキューに戻してやり直す. MAX_ATTEMPTS 回失敗したら失敗にする
 - 費用はやり直しをまたいで足し上げ、残りの予算だけを次の試行に渡す
 - SIGTERM を受けたら、処理中のジョブを終えてから止まる
+- 1 件の処理で想定外の例外（DynamoDB のスロットリングなど）が出ても、ログを出して次へ進む（ワーカーは落とさない）.
+  メッセージは消していないので、見えない時間が切れたら再配信され、やり直される
 """
 
 from __future__ import annotations
@@ -39,8 +41,8 @@ class _CostMeter:
     def __init__(self, llm: LLMClient):
         self.llm, self.name, self.spent = llm, llm.name, 0.0
 
-    def complete(self, model: str, system: str, user: str, max_tokens: int) -> LLMReply:
-        r = self.llm.complete(model, system, user, max_tokens)
+    def complete(self, model: str, system: str, user: str, max_tokens: int, schema: dict | None = None) -> LLMReply:
+        r = self.llm.complete(model, system, user, max_tokens, schema=schema)
         self.spent += r.cost_usd
         return r
 
@@ -87,7 +89,13 @@ class Worker:
         signal.signal(signal.SIGINT, lambda *_: self.stopping.set())
         log.info("worker started", extra={"backend": self.s.backend, "llm": self.llm.name})
         while not self.stopping.is_set():
-            if not self.run_once():
+            try:
+                got = self.run_once()
+            except Exception:  # noqa: BLE001 - キューの受信の失敗など. 落ちずに少し待ってから続ける
+                log.exception("worker loop failed; retrying")
+                self.stopping.wait(5)
+                continue
+            if not got:
                 self._cleanup_if_due()
                 if self.s.backend == "azure":
                     self.stopping.wait(5)  # Storage Queue には長いポーリングが無い
@@ -96,7 +104,11 @@ class Worker:
     def run_once(self, wait_seconds: int = 10) -> bool:
         msgs = self.queue.receive(max_messages=1, wait_seconds=wait_seconds, visibility_seconds=VISIBILITY_SECONDS)
         for m in msgs:
-            self.handle(m)
+            try:
+                self.handle(m)
+            except Exception:  # noqa: BLE001 - 1 件の失敗でワーカーを落とさない
+                # メッセージは消さない. 見えない時間が切れたら再配信され、別の試行でやり直す
+                log.exception("message handling failed; will be redelivered", extra={"job_id": m.job_id, "receive_count": m.receive_count})
         return bool(msgs)
 
     def _cleanup_if_due(self) -> None:

@@ -92,19 +92,19 @@ def test_verify_prompt_wraps_findings_as_data():
 @pytest.mark.parametrize(
     ("raw", "want"),
     [("CRITICAL", "MUST"), ("high", "MUST"), ("Blocker", "MUST"), (" must ", "MUST"), ("MEDIUM", "WANT"), ("warning", "WANT"),
-     ("LOW", "NITS"), ("nit", "NITS"), ("minor", "NITS"), ("question", "Q"), ("Q", "Q"), ("必須", "MUST")],
+     ("LOW", "NITS"), ("nit", "NITS"), ("minor", "NITS"), ("question", "Q"), ("Q", "Q"), ("必須", "MUST"), ("P0", "MUST"), ("query", "Q")],
 )  # fmt: skip
 def test_normalize_severity_synonyms(raw, want):
     assert normalize_severity(raw) == want
 
 
-@pytest.mark.parametrize("raw", ["SUPER", "", None, "P0"])
+@pytest.mark.parametrize("raw", ["SUPER", "", None, "URGENT"])
 def test_normalize_severity_unknown(raw):
     assert normalize_severity(raw) is None
 
 
 def test_unknown_severity_is_not_downgraded_but_flagged():
-    text = _reply(_f("CRITICAL", "a"), _f("catastrophic", "b"), _f("LOW", "c"), {"severity": "HIGH"})  # 最後は題名なしで捨てられる
+    text = _reply(_f("CRITICAL", "a"), _f("catastrophic", "b"), _f("LOW", "c"))
     found, unknown = parse_document_findings(text, STD, "s")
     by_title = {f.title: f for f in found}
     assert by_title["a"].severity == "MUST" and by_title["c"].severity == "NITS"
@@ -175,3 +175,80 @@ def test_diff_budget_gate_trips_for_expensive_model(monkeypatch):
     out = review_diff(DIFF, llm, STD, "claude-ultra-1", budget_usd=1.0)
     assert [c["model"] for c in llm.calls] == [STD]  # 高いモデルの検証は予算で止まる
     assert any("予算" in n for n in out.notes)
+
+
+# ---- (4) 読めない出力は「指摘 0 件」にしない（スキーマで検証）
+
+BROKEN = [
+    '```json\n{"findings": [{"severity": "MUST", "location": "1 章", "title": "桁が違う"},]}\n```',  # 末尾のカンマ. MUST 入り
+    "findings はありませんでした。",  # findings という語を含む文章
+    '{"findings": "なし"}',
+    '{"findings": [{"severity": "HIGH"}]}',  # 題名が無い
+    '{"result": []}',
+]
+
+
+@pytest.mark.parametrize("text", BROKEN)
+def test_broken_output_is_permanent_error_not_zero_findings(text):
+    from review_platform.pipeline import PermanentError
+
+    with pytest.raises(PermanentError, match="読めませんでした"):
+        DocumentReviewer(FakeLLM([text]), STD, DEEP, budget_usd=5).review("a.md", "本文")
+
+
+def test_broken_verify_output_keeps_first_result_with_note():
+    first = _reply(_f("MUST", "a"))
+    out = DocumentReviewer(FakeLLM([first, '{"verdicts": [{"id": "s1", "verdict": "reject"},]}']), STD, DEEP, budget_usd=5).review("a.md", "本文")
+    assert [(f.title, f.status) for f in out.findings] == [("a", "unverified")]
+    assert any("検証の出力を読めなかった" in n for n in out.notes)
+
+
+def test_schema_is_passed_to_llm_for_structured_output():
+    from auto_review.findings import FINDINGS_SCHEMA, VERDICTS_SCHEMA
+
+    llm = FakeLLM([_reply(_f("MUST", "a")), _reply({"id": "s1", "verdict": "confirm"}, key="verdicts")])
+    DocumentReviewer(llm, STD, DEEP, budget_usd=5).review("a.md", "本文")
+    assert [c["schema"] for c in llm.calls] == [FINDINGS_SCHEMA, VERDICTS_SCHEMA]
+
+
+@pytest.mark.parametrize("text", BROKEN[:2])
+def test_worker_marks_job_failed_for_broken_output(settings, svc, text):
+    from conftest import FakeRunner
+    from review_platform.adapters.notify import NoNotifier
+    from review_platform.domain import JobStatus
+    from review_platform.worker import Worker
+
+    job = svc.submit("alice", "a.md", "# 設計".encode())
+    Worker(settings, svc.blobs, svc.queue, svc.repo, FakeLLM([text]), NoNotifier(), FakeRunner()).run_once(wait_seconds=1)
+    done = svc.repo.get(job.job_id)
+    assert done.status == JobStatus.FAILED and "読めませんでした" in done.error
+
+
+def test_diff_review_broken_output_is_permanent_error():
+    from review_platform.pipeline import PermanentError
+
+    diff = "diff --git a/A.java b/A.java\n--- a/A.java\n+++ b/A.java\n@@ -1 +1 @@\n-x\n+y\n"
+    with pytest.raises(PermanentError, match="読めませんでした"):
+        review_diff(diff, FakeLLM([BROKEN[0]]), STD, DEEP, 5)
+
+
+# ---- (5) トークンの見積もり（日本語を甘く見ない）
+
+
+def test_estimate_counts_japanese_one_token_per_char():
+    from review_platform.pipeline.document import estimate_input_tokens
+
+    assert estimate_input_tokens("a" * 300) == 101
+    assert estimate_input_tokens("設" * 300) == 301  # 「3 文字で 1 トークン」なら 101 で、3 倍甘い
+
+
+def test_budget_check_rejects_long_japanese_document():
+    """日本語 6 万字は「3 文字で 1」なら約 2 万トークンで予算に収まるが、実際は約 6 万トークンで超える."""
+    from review_platform.pipeline import PermanentError
+
+    llm = FakeLLM()
+    sonnet = llm_mod.shared_price(STD)
+    budget = (25_000 * sonnet.input + 4000 * sonnet.output) / 1_000_000  # 約 2.5 万トークンぶんの予算
+    with pytest.raises(PermanentError, match="見積もり"):
+        DocumentReviewer(llm, STD, DEEP, budget_usd=budget).review("a.md", "仕様" * 30_000)
+    assert llm.calls == []

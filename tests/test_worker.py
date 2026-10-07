@@ -79,11 +79,11 @@ class FlakyLLM(FakeLLM):
         super().__init__(['```json\n{"findings": []}\n```'])
         self.fails = fails
 
-    def complete(self, model, system, user, max_tokens):
+    def complete(self, model, system, user, max_tokens, schema=None):
         if self.fails:
             self.fails -= 1
             raise LLMError("429", retryable=True)
-        return super().complete(model, system, user, max_tokens)
+        return super().complete(model, system, user, max_tokens, schema=schema)
 
 
 def test_retryable_failure_is_retried_then_succeeds(settings, svc):
@@ -186,3 +186,53 @@ def test_budget_blocks_expensive_document(settings, svc, budget):
     Worker(s, svc.blobs, svc.queue, svc.repo, FakeLLM(), NoNotifier(), FakeRunner()).run_once(wait_seconds=1)
     done = svc.repo.get(job.job_id)
     assert done.status == JobStatus.FAILED and "上限" in done.error
+
+
+# ---- 想定外の例外でワーカーが落ちない
+
+
+class _ThrottledRepo:
+    """transition が最初の n 回だけ Conflict 以外の例外（DynamoDB のスロットリングの代わり）を投げる."""
+
+    def __init__(self, inner, fails: int):
+        self.inner, self.fails = inner, fails
+
+    def transition(self, job, expected, expected_attempts=None):
+        if self.fails:
+            self.fails -= 1
+            raise RuntimeError("ProvisionedThroughputExceededException")
+        return self.inner.transition(job, expected, expected_attempts)
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def test_unexpected_exception_in_transition_does_not_crash_worker(settings, svc, caplog):
+    job = svc.submit("alice", "a.md", "# 設計".encode())
+    w = Worker(settings, svc.blobs, svc.queue, _ThrottledRepo(svc.repo, fails=1), FakeLLM(), NoNotifier(), FakeRunner())
+    assert w.run_once(wait_seconds=1) is True  # 例外は外に出ない
+    assert "message handling failed" in caplog.text
+    assert svc.repo.get(job.job_id).status == JobStatus.QUEUED  # 何も進んでいない
+    svc.queue.extend(_any_message(svc), 0)  # 見えない時間が切れた → 再配信
+    w.run_once(wait_seconds=1)
+    assert svc.repo.get(job.job_id).status == JobStatus.SUCCEEDED
+
+
+def test_run_forever_survives_receive_errors(settings, svc, monkeypatch):
+    import review_platform.worker as wmod
+
+    monkeypatch.setattr(wmod.signal, "signal", lambda *a: None)
+    w = _worker(settings, svc)
+    calls = []
+
+    def flaky(wait_seconds=10):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("receive failed")
+        w.stopping.set()
+        return True
+
+    monkeypatch.setattr(w, "run_once", flaky)
+    monkeypatch.setattr(w.stopping, "wait", lambda t=None: False)
+    w.run_forever()  # 例外で落ちずに 2 回目まで回る
+    assert len(calls) == 2

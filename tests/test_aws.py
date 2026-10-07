@@ -86,6 +86,31 @@ def test_bedrock_request_shape(monkeypatch):
         llm.complete("m", "s", "u", 1)
 
 
+def test_bedrock_structured_output(monkeypatch):
+    """schema を渡すと tools・tool_choice を付け、道具の入力を JSON の文字列で返す."""
+    import io
+    import json
+
+    from auto_review.findings import FINDINGS_SCHEMA
+
+    from review_platform.adapters.llm import BedrockLLM
+
+    llm = BedrockLLM(REGION)
+    sent = {}
+
+    def fake_invoke(**kw):
+        sent.update(kw)
+        content = [{"type": "tool_use", "id": "t", "name": "submit_review", "input": {"findings": []}}]
+        body = {"content": content, "usage": {"input_tokens": 1, "output_tokens": 1}, "stop_reason": "tool_use"}
+        return {"body": io.BytesIO(json.dumps(body).encode())}
+
+    monkeypatch.setattr(llm.client, "invoke_model", fake_invoke)
+    r = llm.complete("m", "s", "u", 10, schema=FINDINGS_SCHEMA)
+    req = json.loads(sent["body"])
+    assert req["tool_choice"]["name"] == "submit_review" and req["tools"][0]["input_schema"] == FINDINGS_SCHEMA
+    assert json.loads(r.text) == {"findings": []}
+
+
 def test_bedrock_masks_pii_logs_request_id_and_uses_shared_prices(monkeypatch, caplog):
     import io
     import json

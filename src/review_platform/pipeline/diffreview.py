@@ -8,6 +8,7 @@ from typing import Any
 
 from auto_review.backends import BackendError, Reply
 from auto_review.diff import parse_diff
+from auto_review.findings import UnreadableOutput
 from auto_review.review import Reviewer
 from auto_review.router import load_config, plan
 
@@ -23,14 +24,16 @@ class _RetryableBackendError(BackendError):
 class _Backend:
     """review-platform の LLM（Messages API の窓口・Bedrock）を auto-review の呼び出し先の形に合わせる."""
 
+    accepts_schema = True  # auto-review はスキーマを渡す（窓口が対応していれば道具の強制で構造化出力にする）
+
     def __init__(self, llm: LLMClient):
         self.llm = llm
         self.name = llm.name
 
-    def call(self, model: dict, system: str, user: str, max_tokens: int, role: str = "") -> Reply:  # role は auto-review が渡す（記録の再生用）
+    def call(self, model: dict, system: str, user: str, max_tokens: int, role: str = "", schema: dict | None = None) -> Reply:  # role は auto-review が渡す（記録の再生用）
         t0 = time.monotonic()
         try:
-            r = self.llm.complete(model["id"], system, user, max_tokens)
+            r = self.llm.complete(model["id"], system, user, max_tokens, schema=schema)
         except LLMError as e:
             raise (_RetryableBackendError if e.retryable else BackendError)(str(e)) from e
         return Reply(r.text, r.input_tokens, r.output_tokens, r.cost_usd, time.monotonic() - t0)
@@ -79,4 +82,6 @@ def review_diff(diff_text: str, llm: LLMClient, model_standard: str, model_deep:
         raise RetryableError(str(e)) from e
     except BackendError as e:
         raise PermanentError(str(e)) from e
+    except UnreadableOutput as e:  # 壊れた JSON・スキーマに合わない出力を「指摘 0 件」にしない
+        raise PermanentError(f"AI の出力を読めませんでした（{e}）") from e
     return DiffOutcome(findings=result.findings, calls=result.calls, notes=result.notes, routing=p.to_dict())
