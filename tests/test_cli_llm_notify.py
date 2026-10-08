@@ -53,9 +53,9 @@ def test_cli_submit_and_worker_once(server, settings, monkeypatch, tmp_path, cap
     doc2 = tmp_path / "b.md"
     doc2.write_text("# b", encoding="utf-8")
     monkeypatch.setattr("time.sleep", lambda s: None)
-    # --wait は結果まで待つ. ワーカーが居ないので終わらず、タイムアウトで 1
-    assert cli.main(["submit", str(doc2), "--url", server, "--token", TOKEN, "--wait", "--timeout", "0"]) == 1
-    assert cli.main(["submit", str(doc2), "--url", server, "--token", "wrong"]) == 1
+    # --wait は結果まで待つ. ワーカーが居ないので終わらず、時間切れの 4（未解決の MUST の 1 と区別する）
+    assert cli.main(["submit", str(doc2), "--url", server, "--token", TOKEN, "--wait", "--timeout", "0"]) == cli.EXIT_TIMEOUT
+    assert cli.main(["submit", str(doc2), "--url", server, "--token", "wrong"]) == cli.EXIT_REQUEST
 
 
 class _Server:
