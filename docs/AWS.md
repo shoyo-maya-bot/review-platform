@@ -55,7 +55,8 @@ AWS のサービスへは VPC エンドポイントで届く。
 | `RP_JWT_ISSUER` / `RP_JWT_JWKS_URL` | Cognito のプールから自動で作る |
 | `RP_JWT_AUDIENCE` | アプリクライアント ID。Cognito のアクセストークンには `aud` がないので、アプリは `token_use = access` と `client_id` で確かめる |
 | `AWS_REGION` / `RP_S3_BUCKET` / `RP_SQS_QUEUE_URL` / `RP_DDB_TABLE` | 作ったリソースから自動で入れる |
-| `RP_LLM` / `RP_LLM_MODEL_DEEP` / `RP_BUDGET_PER_JOB_USD` | 変数から（`llm_provider` / `llm_model_deep` / `budget_per_job_usd`）。`llm_model_deep` が空なら検証しない |
+| `RP_LLM` / `RP_LLM_MODEL_DEEP` | 変数から（`llm_provider` / `llm_model_deep`）。`llm_model_deep` が空なら検証しない |
+| `RP_BUDGET_PER_JOB_USD` / `RP_BUDGET_DAILY_USD` / `RP_BUDGET_DAILY_PER_OWNER_USD` | 変数から（`budget_per_job_usd` / `budget_daily_usd` / `budget_daily_per_owner_usd`）。既定はすべて 0 = 有料の LLM（Bedrock）を呼ばない |
 | `RP_LLM_MODEL_STANDARD` | `llm_model_standard` を入れたときだけ（空ならアプリの既定値） |
 | `RP_LLM_BASE_URL` | `llm_provider = anthropic` のときだけ（`llm_base_url`） |
 | `RP_NOTIFY` | Slack のシークレットを有効にしたら `slack`、それ以外は `none` |
@@ -102,7 +103,8 @@ AWS のサービスへは VPC エンドポイントで届く。
 | **合計** | | **約 36** |
 
 - LLM の費用がほとんどです。モデルと文書の大きさで大きく変わります。
-- 1 ジョブの上限は `budget_per_job_usd`（`RP_BUDGET_PER_JOB_USD`、既定 1.0）です。最悪でも LLM は 100 ジョブで約 100 USD に収まる想定です。
+- **既定では LLM の費用は 0 です**。費用の上限 `budget_per_job_usd`・`budget_daily_usd`・`budget_daily_per_owner_usd`（`RP_BUDGET_*`）の既定は 0 で、0 のままだと Bedrock を一切呼びません（ジョブは変換だけして LLM を呼ばずに failed）。上の表の Bedrock の行は、上限を設定して AI レビューを使うときの試算です。
+- AI レビューを使うときは 3 つとも 0 より大きい値を明示的に入れます（例: 1 ジョブ 1.0・1 日 10・利用者ごと 2）。LLM の費用は 1 日あたり最大で `budget_daily_usd` に収まります。
 - 予算（`monthly_budget_usd`）を超えそうになったらメールが届きます。
 
 ## 前提

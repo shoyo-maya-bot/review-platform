@@ -33,9 +33,10 @@ def _worker(settings, svc, llm):
 # ---- 7. 差分ジョブの一次呼び出しの前に予算を確かめる
 
 
-@pytest.mark.parametrize("budget", [0.0, 0.001])
+@pytest.mark.parametrize("budget", [0.0001, 0.001])
 def test_diff_job_does_not_call_llm_over_budget(settings, svc, budget):
-    """予算 0（や見積もりより小さい予算）では一次の呼び出しもしない（以前は予算 0 でも約 $0.20 使っていた）."""
+    """見積もりより小さい予算では一次の呼び出しもしない（以前は予算が小さくても約 $0.20 使っていた）.
+    予算 0 は「有料の LLM を呼ばない」意味になった（tests/test_budget_zero.py）."""
     s = replace(settings, budget_per_job_usd=budget)
     job = svc.submit("alice", "pr.diff", DIFF.encode())
     llm = FakeLLM([EMPTY])
@@ -202,7 +203,8 @@ def test_successful_job_adds_to_daily_spend(settings, svc):
     assert done.cost_usd > 0 and total == pytest.approx(done.cost_usd, abs=1e-4) and mine == pytest.approx(total)
 
 
-def test_daily_limit_zero_means_unlimited(settings, svc):
+def test_daily_limit_zero_does_not_block_free_fake_llm(settings, svc):
+    """費用のかからない疑似 LLM（fake）では、0（未設定）の日次の上限は効かせない. 有料の LLM では 0 は「呼ばない」（tests/test_budget_zero.py）."""
     s = replace(settings, budget_daily_usd=0.0, budget_daily_per_owner_usd=0.0)
     svc.repo.add_spend(_today(), "alice", 1000.0)
     job = svc.submit("alice", "a.md", "# 設計".encode())
@@ -234,7 +236,7 @@ def test_daily_limits_from_env(monkeypatch):
     monkeypatch.delenv("RP_BUDGET_DAILY_USD")
     monkeypatch.delenv("RP_BUDGET_DAILY_PER_OWNER_USD")
     d = Settings.from_env()
-    assert (d.budget_daily_usd, d.budget_daily_per_owner_usd) == (100.0, 20.0)
+    assert (d.budget_daily_usd, d.budget_daily_per_owner_usd) == (0.0, 0.0)  # 既定は 0 = 有料の LLM を呼ばない
 
 
 # ---- 11. 期限切れのジョブは原本と結果のファイルも消す（ローカル）

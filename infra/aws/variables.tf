@@ -371,13 +371,35 @@ variable "llm_base_url" {
 }
 
 variable "budget_per_job_usd" {
-  description = "RP_BUDGET_PER_JOB_USD。1 ジョブの LLM 費用の上限（USD）。"
+  description = "RP_BUDGET_PER_JOB_USD。1 ジョブの LLM 費用の上限（USD）。既定 0 = 有料の LLM（bedrock・anthropic）を呼ばない。呼ぶのは 3 つの上限をすべて 0 より大きくしたときだけ。"
   type        = number
-  default     = 1.0
+  default     = 0
 
   validation {
-    condition     = var.budget_per_job_usd > 0 && var.budget_per_job_usd <= 100
-    error_message = "budget_per_job_usd は 0 より大きく 100 以下にしてください。"
+    condition     = var.budget_per_job_usd >= 0 && var.budget_per_job_usd <= 100
+    error_message = "budget_per_job_usd は 0 以上 100 以下にしてください（0 は有料の LLM を呼ばない）。"
+  }
+}
+
+variable "budget_daily_usd" {
+  description = "RP_BUDGET_DAILY_USD。1 日（UTC）の LLM 費用の上限（全体、USD）。既定 0 = 有料の LLM を呼ばない。"
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.budget_daily_usd >= 0
+    error_message = "budget_daily_usd は 0 以上にしてください（0 は有料の LLM を呼ばない）。"
+  }
+}
+
+variable "budget_daily_per_owner_usd" {
+  description = "RP_BUDGET_DAILY_PER_OWNER_USD。1 日（UTC）の LLM 費用の上限（利用者ごと、USD）。既定 0 = 有料の LLM を呼ばない。"
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.budget_daily_per_owner_usd >= 0
+    error_message = "budget_daily_per_owner_usd は 0 以上にしてください（0 は有料の LLM を呼ばない）。"
   }
 }
 

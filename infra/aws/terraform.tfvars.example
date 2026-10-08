@@ -27,6 +27,11 @@ llm_provider       = "bedrock"
 llm_model_standard = "<your-inference-profile-id>"
 llm_model_deep     = "" # 上位モデルで検証するときだけ、推論プロファイル ID を入れる。
 
+# 費用の上限（USD）。既定 0 = Bedrock を呼ばない。AI レビューを使うときだけ、3 つとも 0 より大きくする。
+budget_per_job_usd         = 0
+budget_daily_usd           = 0
+budget_daily_per_owner_usd = 0
+
 # ワーカーが呼んでよい ARN。推論プロファイルと、その先の基盤モデル（ルーティング先の各リージョン）を並べる。
 bedrock_model_arns = [
   "arn:aws:bedrock:ap-northeast-1:<account-id>:inference-profile/<your-inference-profile-id>",

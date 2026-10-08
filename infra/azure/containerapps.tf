@@ -93,11 +93,13 @@ locals {
     RP_AZURE_TABLE_NAME = local.table_name
     AZURE_CLIENT_ID     = azurerm_user_assigned_identity.app.client_id
 
-    RP_LLM                = var.llm_mode
-    RP_LLM_BASE_URL       = var.llm_base_url
-    RP_LLM_MODEL_STANDARD = var.llm_model_standard
-    RP_LLM_MODEL_DEEP     = var.llm_model_deep
-    RP_BUDGET_PER_JOB_USD = tostring(var.budget_per_job_usd)
+    RP_LLM                        = var.llm_mode
+    RP_LLM_BASE_URL               = var.llm_base_url
+    RP_LLM_MODEL_STANDARD         = var.llm_model_standard
+    RP_LLM_MODEL_DEEP             = var.llm_model_deep
+    RP_BUDGET_PER_JOB_USD         = tostring(var.budget_per_job_usd)
+    RP_BUDGET_DAILY_USD           = tostring(var.budget_daily_usd)
+    RP_BUDGET_DAILY_PER_OWNER_USD = tostring(var.budget_daily_per_owner_usd)
 
     RP_NOTIFY = var.notify
   }

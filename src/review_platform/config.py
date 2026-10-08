@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+# 費用のかかる LLM. 費用の上限（RP_BUDGET_*）が 1 つでも 0（既定）なら、これらは呼ばない
+PAID_LLMS = frozenset({"anthropic", "bedrock"})
+
 
 class ConfigError(ValueError):
     """設定の誤り. 起動時に止める."""
@@ -95,10 +98,12 @@ class Settings:
     anthropic_api_key: str = ""
     llm_model_standard: str = "claude-sonnet-5-5"
     llm_model_deep: str = "claude-opus-5-5"
-    budget_per_job_usd: float = 1.0
-    # 1 日（UTC）の LLM 費用の上限. 全体と利用者ごと. ジョブ表と同じ共有の保存先で集計する（ワーカーが何台でも効く）. 0 なら上限なし
-    budget_daily_usd: float = 100.0
-    budget_daily_per_owner_usd: float = 20.0
+    # 費用の上限（USD）. 有料の LLM（anthropic・bedrock）にだけ効く. 既定は 0 = 有料の LLM を一切呼ばない.
+    # 呼ぶのは 3 つとも 0 より大きい値を明示的に設定したときだけ. 疑似 LLM（fake）と none は費用 0 なので上限 0 でも動く
+    budget_per_job_usd: float = 0.0
+    # 1 日（UTC）の上限. 全体と利用者ごと. ジョブ表と同じ共有の保存先で集計する（ワーカーが何台でも効く）
+    budget_daily_usd: float = 0.0
+    budget_daily_per_owner_usd: float = 0.0
     mask_pii: bool = True  # LLM に送る前にメールアドレス・電話番号を伏せる
 
     notify: str = "none"
@@ -141,9 +146,9 @@ class Settings:
             anthropic_api_key=_env("ANTHROPIC_API_KEY"),
             llm_model_standard=_env("RP_LLM_MODEL_STANDARD", "claude-sonnet-5-5"),
             llm_model_deep=_env("RP_LLM_MODEL_DEEP", "claude-opus-5-5"),
-            budget_per_job_usd=_float("RP_BUDGET_PER_JOB_USD", 1.0),
-            budget_daily_usd=_float("RP_BUDGET_DAILY_USD", 100.0),
-            budget_daily_per_owner_usd=_float("RP_BUDGET_DAILY_PER_OWNER_USD", 20.0),
+            budget_per_job_usd=_float("RP_BUDGET_PER_JOB_USD", 0.0),
+            budget_daily_usd=_float("RP_BUDGET_DAILY_USD", 0.0),
+            budget_daily_per_owner_usd=_float("RP_BUDGET_DAILY_PER_OWNER_USD", 0.0),
             mask_pii=_bool("RP_MASK_PII", True),
             notify=_choice("RP_NOTIFY", "none", ("none", "slack")),
             slack_webhook_url=_env("RP_SLACK_WEBHOOK_URL"),
@@ -153,6 +158,15 @@ class Settings:
         )
         s.validate()
         return s
+
+    def unset_budgets(self) -> list[str]:
+        """0（未設定）の費用の上限の環境変数名. 1 つでもあれば有料の LLM は呼ばない."""
+        pairs = (
+            ("RP_BUDGET_PER_JOB_USD", self.budget_per_job_usd),
+            ("RP_BUDGET_DAILY_USD", self.budget_daily_usd),
+            ("RP_BUDGET_DAILY_PER_OWNER_USD", self.budget_daily_per_owner_usd),
+        )
+        return [name for name, v in pairs if not v]
 
     def validate(self, role: str = "any") -> None:
         """組み合わせの誤りを起動時に止める. role は api / worker / any."""

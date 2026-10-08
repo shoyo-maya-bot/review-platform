@@ -5,6 +5,9 @@
 - 処理中は定期的にメッセージの「見えない時間」とジョブの貸し出し期限を延ばす
 - 一時的な失敗はキューに戻してやり直す. MAX_ATTEMPTS 回失敗したら失敗にする
 - 費用はやり直しをまたいで足し上げ、残りの予算だけを次の試行に渡す
+- 費用の上限（1 ジョブ・日次の全体・日次の利用者ごと）は既定で 0. 0 は「有料の LLM（anthropic・bedrock）を一切呼ばない」.
+  有料の LLM は 3 つとも 0 より大きい値を明示的に設定したときだけ呼ぶ. 疑似 LLM（fake）と none は費用 0 なので上限 0 でも動く
+  （fake で上限を明示したときは、fake が返す見積もりの費用で上限を試せる）
 - 1 日（UTC）の費用の上限（全体・利用者ごと）を、共有の保存先（ジョブ表）の集計で確かめる. 使える予算は
   「1 ジョブの上限の残り」と「日次の上限の残り」の小さい方. 日次の上限に達していれば LLM を呼ばずに失敗にする
 - 失敗した呼び出し（出力が max_tokens で切れた、など）の費用も、ジョブと日次の集計に足す
@@ -17,13 +20,14 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import signal
 import tempfile
 import threading
 import time
 from pathlib import Path
 
-from .config import Settings
+from .config import PAID_LLMS, Settings
 from .domain import Job, JobKind, JobStatus, iso, now, parse_iso, valid_job_id
 from .pipeline import PermanentError, RetryableError, report
 from .pipeline.convert import ToolRunner, to_markdown
@@ -100,6 +104,8 @@ class Worker:
         signal.signal(signal.SIGTERM, lambda *_: self.stopping.set())
         signal.signal(signal.SIGINT, lambda *_: self.stopping.set())
         log.info("worker started", extra={"backend": self.s.backend, "llm": self.llm.name})
+        if self.llm.name in PAID_LLMS and self.s.unset_budgets():
+            log.warning("paid LLM disabled: budget not set", extra={"llm": self.llm.name, "unset": self.s.unset_budgets()})
         while not self.stopping.is_set():
             try:
                 got = self.run_once()
@@ -210,9 +216,18 @@ class Worker:
     def _remaining_budget(self, job: Job) -> float:
         """この試行で使える予算. 1 ジョブの上限の残りと、日次の上限（全体・利用者ごと）の残りの小さい方.
 
+        上限の 0 は「有料の LLM を呼ばない」. 有料の LLM（anthropic・bedrock）で上限が 1 つでも 0 なら PermanentError（LLM を呼ばない）.
+        費用のかからない LLM（fake・none）では 0 の上限は効かせない（明示した上限だけを、fake の見積もりの費用で確かめる）.
         日次の上限に達していれば PermanentError（LLM を呼ばない）. LLM を使わない設定（RP_LLM=none）では日次の集計を読まない.
         """
-        remaining = max(0.0, self.s.budget_per_job_usd - job.cost_usd)
+        paid = self.llm.name in PAID_LLMS
+        if paid and (unset := self.s.unset_budgets()):
+            raise PermanentError(
+                f"費用の上限（{'・'.join(unset)}）が 0（既定）のため、有料の LLM（{self.llm.name}）は呼びませんでした. "
+                "AI レビューを使うときは、3 つの上限をすべて 0 より大きい値に設定してください"
+            )
+        # 1 ジョブの上限が 0 なのは、費用のかからない LLM のときだけ（上で止めている）. そのときは上限を効かせない
+        remaining = max(0.0, self.s.budget_per_job_usd - job.cost_usd) if self.s.budget_per_job_usd else math.inf
         if self.llm.name == "none" or not (self.s.budget_daily_usd or self.s.budget_daily_per_owner_usd):
             return remaining
         total, mine = self.repo.spent(_today(), job.owner)

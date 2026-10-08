@@ -85,10 +85,11 @@ def test_cost_meter_counts_calls_before_a_failure():
 
 
 def test_retry_gets_only_the_remaining_budget(settings, svc):
+    s = replace(settings, budget_per_job_usd=1.0)
     job = svc.submit("alice", "a.md", "# 設計\n本文".encode())
-    job.cost_usd = settings.budget_per_job_usd  # 前の試行で使い切った
+    job.cost_usd = s.budget_per_job_usd  # 前の試行で使い切った
     svc.repo.transition(job, expected=JobStatus.QUEUED)
-    _worker(settings, svc, FakeLLM()).run_once(wait_seconds=1)
+    _worker(s, svc, FakeLLM()).run_once(wait_seconds=1)
     done = svc.repo.get(job.job_id)
     assert done.status == JobStatus.FAILED and "上限" in done.error
 
