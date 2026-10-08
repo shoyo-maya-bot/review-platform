@@ -40,7 +40,7 @@ def cmd_api(_args) -> int:
     s = _settings("api")
     logs.setup(s.log_level)
     app = create_app(s, services(s))
-    uvicorn.run(app, host=s.host, port=s.port, log_config=None, proxy_headers=True, forwarded_allow_ips=s.forwarded_allow_ips, server_header=False, timeout_keep_alive=65)
+    uvicorn.run(app, host=s.host, port=s.port, log_config=None, proxy_headers=True, forwarded_allow_ips=s.forwarded_allow_ips, server_header=False, timeout_keep_alive=s.keep_alive_seconds)
     return 0
 
 

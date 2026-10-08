@@ -9,7 +9,7 @@ VS Code の Copilot（エージェントモード）や Claude などから、�
 |---|---|---|
 | `submit_document` | `filename`（拡張子で形式を決める）、`content_base64`、`title`（任意） | ジョブ（`job_id`・`status`） |
 | `submit_diff` | `diff`（git diff の出力）、`title`（PR の題名。任意） | ジョブ |
-| `get_job` | `job_id`、`wait_seconds`（最大 120。終わるまで待つ） | 状態・件数・費用 |
+| `get_job` | `job_id`、`wait_seconds`（最大 120。終わるまで待つ。前に置くロードバランサーのアイドルタイムアウトはこれより十分長くする: AWS の `alb_idle_timeout` は既定 300 秒） | 状態・件数・費用 |
 | `get_report` | `job_id`、`format`（`markdown` / `json`） | 結果 |
 | `list_jobs` | `limit` | 自分のジョブ（新しい順） |
 

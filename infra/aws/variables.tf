@@ -277,13 +277,13 @@ variable "acm_certificate_arn" {
 }
 
 variable "alb_idle_timeout" {
-  description = "ALB のアイドルタイムアウト（秒）。MCP の長い応答を切らないよう少し長め。"
+  description = "ALB のアイドルタイムアウト（秒）。MCP の get_job は 1 回で最大 120 秒待つ（応答が無い時間が続く）ので、それより十分長くする（既定 300 秒、最小 150 秒）。アプリの keep-alive はこれ + 5 秒にする（main.tf の RP_KEEP_ALIVE_SECONDS）。"
   type        = number
-  default     = 120
+  default     = 300
 
   validation {
-    condition     = var.alb_idle_timeout >= 1 && var.alb_idle_timeout <= 4000
-    error_message = "alb_idle_timeout は 1〜4000 秒にしてください。"
+    condition     = var.alb_idle_timeout >= 150 && var.alb_idle_timeout <= 4000
+    error_message = "alb_idle_timeout は 150〜4000 秒にしてください（MCP の get_job の最大待ち 120 秒より十分長く）。"
   }
 }
 

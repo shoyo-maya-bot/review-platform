@@ -96,6 +96,7 @@
 | `RP_HOST` | `127.0.0.1` | API の待ち受け。コンテナでは `0.0.0.0` |
 | `RP_PORT` | `8080` | API の待ち受けポート。MCP は同じポートの `/mcp` |
 | `RP_FORWARDED_ALLOW_IPS` | `127.0.0.1` | `X-Forwarded-For` などを信用する送り元. ロードバランサーからしか届かない構成（Terraform の AWS・Azure）だけ `*` にする |
+| `RP_KEEP_ALIVE_SECONDS` | `65` | HTTP の keep-alive（秒、1〜4100）. ロードバランサーの後ろでは、そのアイドルタイムアウトより長くする（短いと 502 が出ることがある）. Terraform の AWS は `alb_idle_timeout`（既定 300 秒）+ 5 を渡す. ALB のアイドルタイムアウトは、MCP の `get_job` の最大待ち（120 秒）より十分長くする（Terraform の検査で 150 秒以上） |
 
 ## コンテナの起動
 

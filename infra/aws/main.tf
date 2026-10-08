@@ -65,6 +65,8 @@ locals {
       RP_PORT = tostring(local.container_port)
       # タスクには ALB からしか届かない（セキュリティグループで制限）ので、X-Forwarded-* を信用する。
       RP_FORWARDED_ALLOW_IPS = "*"
+      # アプリの keep-alive は ALB のアイドルタイムアウトより長くする（短いと ALB が使い回す接続をアプリが先に閉じて 502 になる）。
+      RP_KEEP_ALIVE_SECONDS = tostring(var.alb_idle_timeout + 5)
 
       # ルートファイルシステムを読み取り専用にするので、一時ファイルとホームを /tmp に向ける。
       TMPDIR = "/tmp"
