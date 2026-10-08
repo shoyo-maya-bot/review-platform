@@ -3,7 +3,8 @@
 - anthropic: devtools-common の `devtools_common.llm.LLMClient` に任せる（429・5xx・529 は `retry-after` に従って再試行、
   呼び出しごとにモデル・トークン数・所要時間・request-id・費用を 1 行ログに出す。本文は出さない）
 - 料金は共通の料金表（`devtools_common.llm.PRICES` / `price_for`）で引く。Bedrock の ID（`apac.anthropic.claude-…-v1:0`、
-  推論プロファイルの ARN）も同じ表で引く。表に無いモデルは高い側（UNKNOWN_PRICE）で見積もる
+  推論プロファイルの ARN）も同じ表で引く。表に無いモデル（Bedrock の application-inference-profile の ARN など、ID からモデルが
+  分からないもの）は料金表の最大の単価（UNKNOWN_PRICE）で見積もり、モデルごとに 1 回警告を出す
 - 出力が上限で切れた（stop_reason=max_tokens）ときは、指摘 0 件と区別できるよう LLMError にする
 - masker を渡すと、送る前に system と user の中のメールアドレス・電話番号を伏せる（factory が RP_MASK_PII で決める）
 - schema を渡すと、そのスキーマを入力にした道具（RESULT_TOOL）を 1 つだけ渡して必ず使わせる（構造化出力）. 道具の入力を JSON の文字列で返す.
@@ -28,8 +29,10 @@ log = logging.getLogger(__name__)
 
 __all__ = ["PRICES", "UNKNOWN_PRICE", "AnthropicLLM", "BedrockLLM", "FakeLLM", "LLMError", "Masker", "NoLLM", "Price", "cost", "price_for"]
 
-# 料金表に無いモデルの見積もりに使う単価（USD / 100 万トークン）. 現行の最上位モデル（claude-opus-5-5）と同じ高い側で見積もる
-UNKNOWN_PRICE = (4.0, 20.0)
+# 料金表に無いモデルの見積もりに使う単価（USD / 100 万トークン）. 料金表の入力・出力それぞれの最大値（費用を少なく数えないため）.
+# キャッシュの書き込み・読み出しも入力の最大値で数える
+UNKNOWN_PRICE = (max(p.input for p in PRICES.values()), max(p.output for p in PRICES.values()))
+_warned_unknown: set[str] = set()
 RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
 RESULT_TOOL = "submit_review"
 
@@ -69,7 +72,16 @@ def canonical_model(model: str) -> str:
 
 
 def shared_price(model: str) -> Price | None:
-    return dc.price_for(canonical_model(model))
+    p = dc.price_for(canonical_model(model))
+    if p is None and model not in _warned_unknown:
+        _warned_unknown.add(model)
+        log.warning(
+            "料金表に無いモデルです. 費用は料金表の最大の単価（入力 $%s・出力 $%s / 100 万トークン）で見積もります: %s",
+            UNKNOWN_PRICE[0],
+            UNKNOWN_PRICE[1],
+            model,
+        )
+    return p
 
 
 def price_for(model: str) -> tuple[float, float]:
@@ -79,7 +91,7 @@ def price_for(model: str) -> tuple[float, float]:
 
 
 def cost(model: str, input_tokens: int, output_tokens: int, cache_write_tokens: int = 0, cache_read_tokens: int = 0) -> float:
-    """費用の見積もり（USD）. input_tokens はキャッシュを除いた入力. 料金表に無いモデルは高い側の単価で見積もる."""
+    """費用の見積もり（USD）. input_tokens はキャッシュを除いた入力. 料金表に無いモデルは料金表の最大の単価で見積もる."""
     p = shared_price(model)
     if p is None:
         pin, pout = UNKNOWN_PRICE

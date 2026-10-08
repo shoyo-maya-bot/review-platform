@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +37,9 @@ def _float(name: str, default: float) -> float:
         v = float(raw)
     except ValueError as e:
         raise ConfigError(f"{name} は数値で指定してください（{raw!r}）") from e
+    if not math.isfinite(v):
+        # inf・nan を通すと上限との比較がいつも偽・真になり、予算の確認が効かなくなる
+        raise ConfigError(f"{name} は有限の数値で指定してください（{raw!r}）")
     if v < 0:
         raise ConfigError(f"{name} は 0 以上で指定してください（{v}）")
     return v
