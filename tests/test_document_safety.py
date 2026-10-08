@@ -252,3 +252,49 @@ def test_budget_check_rejects_long_japanese_document():
     with pytest.raises(PermanentError, match="見積もり"):
         DocumentReviewer(llm, STD, DEEP, budget_usd=budget).review("a.md", "仕様" * 30_000)
     assert llm.calls == []
+
+
+# ---- 第 3 回: 検証段の PermanentError で一次の結果まで捨てない
+
+
+@pytest.mark.parametrize("err", [llm_mod.LLMError("出力が上限で切れました（max_tokens）", retryable=False, cost_usd=0.2), llm_mod.LLMError("invalid request", retryable=False)])
+def test_permanent_verify_failure_keeps_first_result_with_note(err):
+    """検証段の呼び出しが再試行しない失敗（PermanentError）でも、一次の結果を検証なしとして出し、その旨を notes に残す."""
+
+    class FailSecond(FakeLLM):
+        def complete(self, model, system, user, max_tokens, schema=None):
+            if self.calls:
+                self.calls.append({"model": model})
+                raise err
+            return super().complete(model, system, user, max_tokens, schema=schema)
+
+    out = DocumentReviewer(FailSecond([_reply(_f("MUST", "a"), _f("WANT", "b"))]), STD, DEEP, budget_usd=5).review("a.md", "本文")
+    assert [(f.title, f.status) for f in out.findings] == [("a", "unverified"), ("b", "unverified")]
+    assert any("検証に失敗したため、一次の結果だけ" in n for n in out.notes)
+    assert [c.step for c in out.calls] == ["standard"]
+
+
+def test_worker_keeps_first_result_when_verify_fails_permanently(settings, svc):
+    from dataclasses import replace
+
+    from conftest import FakeRunner
+    from review_platform.adapters.notify import NoNotifier
+    from review_platform.domain import JobStatus
+    from review_platform.worker import Worker
+
+    class CutSecond(FakeLLM):
+        def complete(self, model, system, user, max_tokens, schema=None):
+            if self.calls:
+                self.calls.append({"model": model})
+                raise llm_mod.LLMError("出力が上限で切れました（max_tokens）", retryable=False, cost_usd=0.2)
+            return super().complete(model, system, user, max_tokens, schema=schema)
+
+    s = replace(settings, budget_per_job_usd=5.0)
+    job = svc.submit("alice", "a.md", "# 設計\n本文".encode())
+    Worker(s, svc.blobs, svc.queue, svc.repo, CutSecond([_reply(_f("MUST", "a"))]), NoNotifier(), FakeRunner()).run_once(wait_seconds=1)
+    done = svc.repo.get(job.job_id)
+    rep = json.loads(svc.blobs.get(done.report_json_key))
+    assert done.status == JobStatus.SUCCEEDED
+    assert [f["title"] for f in rep["findings"]] == ["a"]
+    assert any("検証に失敗したため" in n for n in rep["notes"])
+    assert done.cost_usd >= 0.2  # 切れた検証の呼び出しの費用も数える

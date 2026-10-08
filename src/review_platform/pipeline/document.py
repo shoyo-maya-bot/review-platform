@@ -182,7 +182,9 @@ class DocumentReviewer:
             else:
                 try:
                     vtext = self._call("verify", self.deep, vsys, vuser, out)
-                except RetryableError as e:
+                except (RetryableError, PermanentError) as e:
+                    # 検証段の失敗（出力が max_tokens で切れた・日次の上限の予約ができない、など）で一次の結果まで捨てない.
+                    # 出力を読めないとき（UnreadableOutput）と同じく、一次の結果を検証なしとして出し、その旨を残す
                     out.notes.append(f"上位モデルの検証に失敗したため、一次の結果だけを出します（{e}）")
                 else:
                     try:
