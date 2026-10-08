@@ -16,7 +16,7 @@ from contextlib import closing
 from pathlib import Path
 
 from ..domain import Job, JobStatus, valid_job_id
-from ..ports import SPEND_ALL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
+from ..ports import SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
 
 log = logging.getLogger(__name__)
 
@@ -210,6 +210,29 @@ class SqliteJobRepository(_Sqlite):
                     "INSERT INTO spend (day, scope, usd, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT (day, scope) DO UPDATE SET usd = usd + excluded.usd",
                     (day, scope, float(usd), exp),
                 )
+
+    def reserve_spend(self, day: str, owner: str, usd: float, limit_total: float, limit_owner: float) -> str | None:
+        """上限を超えないときだけ足す. 読みと足しを 1 つの書き込みトランザクション（BEGIN IMMEDIATE）で行うので、同時に予約しても超えない."""
+        exp, mine = spend_expires_at(day), spend_scope(owner)
+        with closing(self.connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                rows = dict(con.execute("SELECT scope, usd FROM spend WHERE day = ? AND scope IN (?, ?)", (day, SPEND_ALL, mine)).fetchall())
+                for scope, limit, label in ((SPEND_ALL, limit_total, SPEND_TOTAL), (mine, limit_owner, SPEND_OWNER)):
+                    if limit and float(rows.get(scope, 0.0)) + usd > limit + 1e-9:
+                        con.execute("ROLLBACK")
+                        return label
+                for scope in (SPEND_ALL, mine):
+                    con.execute(
+                        "INSERT INTO spend (day, scope, usd, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT (day, scope) DO UPDATE SET usd = usd + excluded.usd",
+                        (day, scope, float(usd), exp),
+                    )
+                con.execute("COMMIT")
+            except BaseException:
+                if con.in_transaction:
+                    con.execute("ROLLBACK")
+                raise
+        return None
 
     def spent(self, day: str, owner: str) -> tuple[float, float]:
         with closing(self.connect()) as con:

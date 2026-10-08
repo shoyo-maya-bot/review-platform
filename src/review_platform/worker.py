@@ -11,6 +11,8 @@
 - 1 日（UTC）の費用の上限（全体・利用者ごと）を、共有の保存先（ジョブ表）の集計で確かめる. 使える予算は
   「1 ジョブの上限の残り」と「日次の上限の残り」の小さい方. 日次の上限に達していれば LLM を呼ばずに失敗にする
 - 失敗した呼び出し（出力が max_tokens で切れた、など）の費用も、ジョブと日次の集計に足す
+- 日次の上限があるときは、LLM を 1 回呼ぶごとに、呼ぶ前に見積もり額（出力は上限いっぱい）を共有の集計に予約する（条件付き更新.
+  複数のワーカーが同時に呼んでも上限を超えない）. 呼んだ後に実額との差を精算する. 予約できなければ呼ばずに失敗にする
 - SIGTERM を受けたら、処理中のジョブを終えてから止まる
 - 1 件の処理で想定外の例外（DynamoDB のスロットリングなど）が出ても、ログを出して次へ進む（ワーカーは落とさない）.
   メッセージは消していないので、見えない時間が切れたら再配信され、やり直される
@@ -31,7 +33,7 @@ from .config import PAID_LLMS, Settings
 from .domain import Job, JobKind, JobStatus, iso, now, parse_iso, valid_job_id
 from .pipeline import PermanentError, RetryableError, report
 from .pipeline.convert import ToolRunner, to_markdown
-from .ports import BlobStore, Conflict, JobQueue, JobRepository, LLMClient, LLMReply, NotFound, Notifier, QueueMessage
+from .ports import SPEND_TOTAL, BlobStore, Conflict, JobQueue, JobRepository, LLMClient, LLMReply, NotFound, Notifier, QueueMessage
 
 log = logging.getLogger(__name__)
 
@@ -43,20 +45,67 @@ CLEANUP_INTERVAL_SECONDS = 3600
 
 
 class _CostMeter:
-    """LLM の呼び出しを数える. 試行が途中で失敗しても、それまでに使った費用をジョブに足せるように."""
+    """LLM の呼び出しを数える. 試行が途中で失敗しても、それまでに使った費用をジョブに足せるように.
 
-    def __init__(self, llm: LLMClient):
+    日次の上限があるとき（reserve=True）は、呼び出しの前に見積もり額（伏せ字の後の入力 + 出力の上限いっぱい）を共有の集計に
+    予約し（JobRepository.reserve_spend. 条件付き更新なので、複数のワーカーが同時に呼んでも上限を超えない）、呼び出しの後に
+    実額との差を精算する. 予約できなければ呼ばずに LLMError（再試行しない）. 日次の上限が無いときは、呼んだ後に実額を足すだけ.
+    """
+
+    def __init__(self, llm: LLMClient, repo: JobRepository | None = None, owner: str = "", limits: tuple[float, float] = (0.0, 0.0), reserve: bool = False):
         self.llm, self.name, self.spent = llm, llm.name, 0.0
+        self.repo, self.owner, self.limits, self.reserve = repo, owner, limits, reserve
+
+    @property
+    def masker(self):
+        return getattr(self.llm, "masker", None)
+
+    def estimate(self, model: str, system: str, user: str, max_tokens: int) -> float:
+        """予約する額. 外部に送るのと同じ伏せ字をかけた後の文字列で数え、出力は上限いっぱいとみなす."""
+        from auto_review.tokens import estimate_tokens
+
+        from .adapters.llm import cost
+
+        m = self.masker
+        if m is not None:
+            system, user = m.text(system), m.text(user)
+        return cost(model, estimate_tokens(system + user, 3.0), max_tokens)
 
     def complete(self, model: str, system: str, user: str, max_tokens: int, schema: dict | None = None) -> LLMReply:
+        from .adapters.llm import LLMError
+
+        held = 0.0
+        if self.reserve and self.repo is not None:
+            held = self.estimate(model, system, user, max_tokens)
+            try:
+                over = self.repo.reserve_spend(_today(), self.owner, held, *self.limits)
+            except Exception as e:  # noqa: BLE001 - 集計の保存先の失敗. 呼ばずに、一時的な失敗としてやり直す
+                raise LLMError(f"日次の費用の予約に失敗しました（{type(e).__name__}）", retryable=True) from e
+            if over:
+                label, limit = ("全体", self.limits[0]) if over == SPEND_TOTAL else ("利用者ごと", self.limits[1])
+                raise LLMError(f"本日（UTC）の LLM 費用の上限（{label} ${limit:.2f}）を超える見込み（見積もり ${held:.2f}）のため、LLM を呼びませんでした")
         try:
             r = self.llm.complete(model, system, user, max_tokens, schema=schema)
         except Exception as e:
             # 失敗しても課金された分（出力が max_tokens で切れた、など. LLMError.cost_usd）を数える
-            self.spent += float(getattr(e, "cost_usd", 0.0) or 0.0)
+            used = float(getattr(e, "cost_usd", 0.0) or 0.0)
+            self.spent += used
+            self._settle(used, held)
             raise
         self.spent += r.cost_usd
+        self._settle(r.cost_usd, held)
         return r
+
+    def _settle(self, used: float, held: float) -> None:
+        """日次の集計を実額にそろえる（予約していれば差額を足す. 負もありうる）. 集計の失敗でジョブを失敗・やり直しにしない
+        （二重に費用をかけないため）. ログに残す."""
+        delta = used - held
+        if self.repo is None or abs(delta) < 1e-12:
+            return
+        try:
+            self.repo.add_spend(_today(), self.owner, delta)
+        except Exception:  # noqa: BLE001
+            log.exception("daily spend not recorded", extra={"cost_usd": used, "reserved_usd": held})
 
 
 def _today() -> str:
@@ -171,19 +220,18 @@ class Worker:
             return
         log.info("job started", extra={"job_id": job.job_id, "kind": job.kind.value, "attempt": job.attempts})
         t0 = time.monotonic()
-        meter = _CostMeter(self.llm)
+        limits = (self.s.budget_daily_usd, self.s.budget_daily_per_owner_usd)
+        meter = _CostMeter(self.llm, self.repo, job.owner, limits, reserve=self.llm.name != "none" and any(limits))
         try:
             remaining = self._remaining_budget(job)
             with _Heartbeat(self.queue, m, self.repo, job):
                 rep = self._process(job, meter, remaining_budget=remaining)
         except PermanentError as e:
             job.cost_usd += meter.spent
-            self._record_spend(job, meter.spent)
             self._finish(job, m, JobStatus.FAILED, error=str(e)[:500])
             return
         except (RetryableError, Exception) as e:  # noqa: BLE001 - 想定外の失敗もやり直しの対象にする
             job.cost_usd += meter.spent
-            self._record_spend(job, meter.spent)
             level = logging.WARNING if isinstance(e, RetryableError) else logging.ERROR
             log.log(
                 level,
@@ -205,7 +253,6 @@ class Worker:
             return
         job.summary = report.summary(rep)
         job.cost_usd += max(rep["cost_usd"], meter.spent)  # 結果に残らない失敗した呼び出しの分も足す
-        self._record_spend(job, meter.spent)
         log.info(
             "job processed",
             extra={"job_id": job.job_id, "seconds": round(time.monotonic() - t0, 1), "cost_usd": job.cost_usd, **{f"n_{k}": v for k, v in job.summary["severity"].items()}},
@@ -241,15 +288,6 @@ class Worker:
                 raise PermanentError(f"本日（UTC）の LLM 費用の上限（{label} ${limit:.2f}）に達しているため、AI レビューを行いませんでした. 明日以降に送り直してください")
             remaining = min(remaining, limit - used)
         return remaining
-
-    def _record_spend(self, job: Job, usd: float) -> None:
-        """日次の集計に足す. 集計の失敗でジョブを失敗・やり直しにしない（二重に費用をかけないため）. ログに残す."""
-        if usd <= 0:
-            return
-        try:
-            self.repo.add_spend(_today(), job.owner, usd)
-        except Exception:  # noqa: BLE001
-            log.exception("daily spend not recorded", extra={"job_id": job.job_id, "cost_usd": usd})
 
     def _finish(self, job: Job, m: QueueMessage, status: JobStatus, error: str = "") -> None:
         previous = job.status

@@ -30,6 +30,8 @@ class _Backend:
     def __init__(self, llm: LLMClient):
         self.llm = llm
         self.name = llm.name
+        # auto-review は見積もりの前にこの伏せ字をかける（実際に送るのと同じ. RP_MASK_PII で決まる. None なら伏せない）
+        self.masker = getattr(llm, "masker", None)
 
     def call(self, model: dict, system: str, user: str, max_tokens: int, role: str = "", schema: dict | None = None) -> Reply:  # role は auto-review が渡す（記録の再生用）
         t0 = time.monotonic()
@@ -103,4 +105,8 @@ def review_diff(diff_text: str, llm: LLMClient, model_standard: str, model_deep:
         raise PermanentError(str(e)) from e
     except UnreadableOutput as e:  # 壊れた JSON・スキーマに合わない出力を「指摘 0 件」にしない
         raise PermanentError(f"AI の出力を読めませんでした（{e}）") from e
+    if getattr(result, "over_budget", False):
+        # auto-review が予算超過の見込みでモデルを呼ばなかった. 「指摘 0 件」の成功にせず、理由を残して失敗にする
+        why = " / ".join(result.notes) or "予算を超える見込みです"
+        raise PermanentError(f"見積もりが使える予算 ${budget_usd:.2f}（1 ジョブの上限・日次の上限の残り）を超えるため、AI レビューを行いませんでした（{why}）")
     return DiffOutcome(findings=result.findings, calls=result.calls, notes=result.notes, routing=p.to_dict())

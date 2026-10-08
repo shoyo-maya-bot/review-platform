@@ -45,10 +45,15 @@ class JobRepository(Protocol):
     def delete_expired(self, now_epoch: int, limit: int = 100) -> int: ...  # TTL の無い保存先のため
     # 日次の LLM 費用（全体と利用者ごと）. 複数のワーカーで共有するため、ジョブ表と同じ保存先に置く（day は UTC の YYYY-MM-DD）
     def add_spend(self, day: str, owner: str, usd: float) -> None: ...  # 全体と owner の両方に足す
-    def spent(self, day: str, owner: str) -> tuple[float, float]: ...  # （全体, owner）. 無ければ 0
+    def spent(self, day: str, owner: str) -> tuple[float, float]: ...  # （全体, owner）. 無ければ 0（予約中の額を含む）
+    # 呼び出しの前の予約. 足した後の額が上限（0 は上限なし）を超えないときだけ、全体と owner の両方に一度に足して None.
+    # 超えるなら何も足さずに、超えた範囲（SPEND_TOTAL か SPEND_OWNER）を返す. 複数のワーカーが同時に予約しても上限を超えない
+    # （条件付き更新）. 呼び出しの後は add_spend（実額 − 予約額. 負もありうる）で精算する
+    def reserve_spend(self, day: str, owner: str, usd: float, limit_total: float, limit_owner: float) -> str | None: ...
 
 
 SPEND_ALL = "all"  # 全体の集計のキー
+SPEND_TOTAL, SPEND_OWNER = "total", "owner"  # reserve_spend が返す「超えた範囲」
 SPEND_TTL_DAYS = 40  # 日次の集計を残す日数（TTL・期限切れの削除に使う）
 
 
