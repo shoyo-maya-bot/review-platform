@@ -17,7 +17,7 @@ RUN pip install -c constraints.txt ".[aws,azure]" && pip uninstall -y pip
 # 設計書の変換ツール（doc2md）は別の venv に入れる. ワーカーは別プロセスで呼ぶだけなので、doc-to-markdown が固定している
 # devtools-common の版がこのパッケージ（auto-review と同じ版）と違ってもぶつからない. 版はコミット SHA で固定する
 # （pyproject.toml の tools と同じ SHA にする. tests/test_pins.py が確かめる）. 依存の版は、同じ SHA の doc-to-markdown の constraints.txt でそろえる
-ARG DOC2MD_REF=a2220a7752e31c976d57cb5df743c8285a587306
+ARG DOC2MD_REF=24958948fbcee639026b209d5f18e176a41849d6
 ADD https://raw.githubusercontent.com/shoyo-maya-bot/doc-to-markdown/${DOC2MD_REF}/constraints.txt /tmp/doc2md-constraints.txt
 RUN python -m venv /opt/doc2md \
     && /opt/doc2md/bin/pip install -c /tmp/doc2md-constraints.txt "doc-to-markdown @ git+https://github.com/shoyo-maya-bot/doc-to-markdown.git@${DOC2MD_REF}" \
