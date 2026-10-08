@@ -44,7 +44,7 @@
 | `AWS_REGION` | リージョン（なければ `AWS_DEFAULT_REGION`） |
 | `RP_S3_BUCKET` | 原本と結果を置くバケット |
 | `RP_SQS_QUEUE_URL` | ジョブのキュー（デッドレターキューは Terraform 側で設定） |
-| `RP_DDB_TABLE` | ジョブの表（パーティションキー `job_id`（文字列）、TTL 属性 `expires_at`（UNIX 秒）、GSI `owner-job-index`（パーティションキー `owner`・ソートキー `job_id`、射影 ALL）。GSI は利用者ごとの一覧に使う。名前はアプリと Terraform で合わせる） |
+| `RP_DDB_TABLE` | ジョブの表（パーティションキー `job_id`（文字列）、TTL 属性 `expires_at`（UNIX 秒）、GSI `owner-job-index`（パーティションキー `owner`・ソートキー `job_id`、射影 ALL）。GSI は利用者ごとの一覧に使う。日次の費用の集計も同じ表に `job_id = spend#<日付>#<範囲>` の項目で置く（ワーカーに `UpdateItem` が要る）。名前はアプリと Terraform で合わせる） |
 | `RP_AWS_ENDPOINT_URL` | （任意）moto サーバーなどのエミュレーターに向けるときだけ（docker compose の `--profile aws` で使う）。S3・SQS・DynamoDB に効く。Bedrock には効かない。クラウドでは使わない |
 
 認証は実行ロール（ECS のタスクロール）。アクセスキーは使いません。
@@ -73,7 +73,9 @@
 | `ANTHROPIC_API_KEY` | （空） | `anthropic` のときの API キー（シークレットから渡す） |
 | `RP_LLM_MODEL_STANDARD` | `claude-sonnet-5-5` | ふだんのレビューのモデル。Bedrock では推論プロファイル ID |
 | `RP_LLM_MODEL_DEEP` | `claude-opus-5-5` | 検証に使う上位モデル。空なら検証しない |
-| `RP_BUDGET_PER_JOB_USD` | `1.0` | 1 ジョブの費用の上限. やり直しをまたいで足し上げる（見積もりで超えそうなら上位モデルを省き、ふだんのレビューも超えるなら failed） |
+| `RP_BUDGET_PER_JOB_USD` | `1.0` | 1 ジョブの費用の上限. やり直しをまたいで足し上げる（見積もりで超えそうなら上位モデルを省き、ふだんのレビューも超えるなら呼ばずに failed. 設計書・差分のどちらも、最初の呼び出しの前に見積もりで確かめる） |
+| `RP_BUDGET_DAILY_USD` | `100.0` | 1 日（UTC）の LLM 費用の上限（全体）. `0` で上限なし. ジョブ表と同じ共有の保存先（SQLite・DynamoDB・Table Storage）で集計するので、ワーカーが何台でも効く. 達したら LLM を呼ばずに failed. 1 ジョブで使える予算は、1 ジョブの上限の残りと日次の上限の残りの小さい方 |
+| `RP_BUDGET_DAILY_PER_OWNER_USD` | `20.0` | 1 日（UTC）の LLM 費用の上限（利用者ごと）. `0` で上限なし. 扱いは `RP_BUDGET_DAILY_USD` と同じ |
 | `RP_MASK_PII` | `1` | `1`（既定）なら、LLM に送る前に設計書・差分・プロンプトの中のメールアドレスと電話番号（日本の形式。全角・区切りなし・`+81` を含む）を `＊＊＊` に置き換える（`devtools_common.llm.Masker`）。`anthropic`・`bedrock`・`fake` のすべてに効く。`0` で止める（メールアドレスの検査そのものをレビューしたいときなど）。詳しくは [SECURITY.md](SECURITY.md) |
 
 ## 通知

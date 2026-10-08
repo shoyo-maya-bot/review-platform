@@ -6,11 +6,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from auto_review.backends import BackendError, Reply
+from auto_review.backends import BackendError, Reply, price
 from auto_review.diff import parse_diff
 from auto_review.findings import UnreadableOutput
-from auto_review.review import Reviewer
+from auto_review.review import PROMPTS, Reviewer, build_context
 from auto_review.router import load_config, plan
+from auto_review.tokens import DEFAULT_CHARS_PER_TOKEN, estimate_tokens
 
 from ..adapters.llm import LLMError, price_for
 from ..ports import LLMClient
@@ -35,6 +36,7 @@ class _Backend:
         try:
             r = self.llm.complete(model["id"], system, user, max_tokens, schema=schema)
         except LLMError as e:
+            # 費用（max_tokens で切れた呼び出しなど）は worker の _CostMeter が数える
             raise (_RetryableBackendError if e.retryable else BackendError)(str(e)) from e
         return Reply(r.text, r.input_tokens, r.output_tokens, r.cost_usd, time.monotonic() - t0)
 
@@ -69,6 +71,15 @@ def build_config(model_standard: str, model_deep: str, budget_usd: float) -> dic
     return cfg
 
 
+def estimate_first_call(cfg: dict, diff_text: str, changes: list, risky_files: list[str]) -> float:
+    """一次レビュー（standard モデル）の見積もり（USD）. Reviewer.auto と同じ文脈（差分 + 変更ファイル）とプロンプトで数え、出力は上限いっぱいとみなす."""
+    budget = cfg["budget"]
+    ctx = build_context(diff_text, changes, None, cfg, risky_files, budget["context_max_tokens"])
+    system = (PROMPTS / "review.md").read_text(encoding="utf-8")
+    tokens = estimate_tokens(system + ctx, budget.get("chars_per_token", DEFAULT_CHARS_PER_TOKEN))
+    return price(cfg["models"]["standard"], tokens, budget["output_tokens"]["standard"])
+
+
 def review_diff(diff_text: str, llm: LLMClient, model_standard: str, model_deep: str, budget_usd: float, title: str = "") -> DiffOutcome:
     cfg = build_config(model_standard, model_deep, budget_usd)
     changes = parse_diff(diff_text)
@@ -76,6 +87,14 @@ def review_diff(diff_text: str, llm: LLMClient, model_standard: str, model_deep:
         raise PermanentError("差分にファイルの変更がありません")
     p = plan(changes, cfg)
     note = f"# PR: {title}\n\n" if title else ""
+    if p.tier != "skip":
+        # auto-review の予算の確認は上位モデルの前だけ. 一次の呼び出しも、呼ぶ前に見積もりで確かめる（予算 0 でも呼んでしまわないように）
+        est = estimate_first_call(cfg, note + diff_text, changes, p.risky_files)
+        if est > budget_usd:
+            raise PermanentError(
+                f"見積もり ${est:.2f} が使える予算 ${budget_usd:.2f}（1 ジョブの上限・日次の上限の残り）を超えるため、AI レビューを行いませんでした"
+                "（差分を分けるか、RP_BUDGET_PER_JOB_USD・日次の上限を見直してください）"
+            )
     try:
         result = Reviewer(cfg, _Backend(llm), repo=None).auto(note + diff_text, changes, p)
     except _RetryableBackendError as e:

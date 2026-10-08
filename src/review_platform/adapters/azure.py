@@ -2,6 +2,7 @@
 
 Storage Queue には DLQ が無いので、受信回数が上限を超えたメッセージは `<キュー名>-poison` に移す.
 Table Storage には TTL が無いので、期限切れの行はワーカーが定期的に消す（delete_expired）.
+日次の費用は同じ表の別のパーティション（spend）に置き、ETag の条件付き更新で足す（同時に足しても失われない）.
 """
 
 from __future__ import annotations
@@ -17,9 +18,10 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.storage.queue import QueueClient
 
 from ..domain import Job, JobStatus
-from ..ports import Conflict, NotFound, QueueMessage
+from ..ports import SPEND_ALL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
 
 PARTITION = "job"
+SPEND_PARTITION = "spend"
 
 
 def _credential():
@@ -150,4 +152,40 @@ class AzureJobRepository:
                 break
             self.t.delete_entity(PARTITION, r["RowKey"])
             n += 1
+        old = self.t.query_entities("PartitionKey eq @p and expires_at lt @n", parameters={"p": SPEND_PARTITION, "n": now_epoch}, select=["RowKey"])
+        for i, r in enumerate(old):
+            if i >= limit:
+                break
+            with contextlib.suppress(ResourceNotFoundError):
+                self.t.delete_entity(SPEND_PARTITION, r["RowKey"])
         return n
+
+    def add_spend(self, day: str, owner: str, usd: float, attempts: int = 10) -> None:
+        for scope in (SPEND_ALL, spend_scope(owner)):
+            row = f"{day}|{scope}"
+            for _ in range(attempts):
+                try:
+                    cur = self.t.get_entity(SPEND_PARTITION, row)
+                except ResourceNotFoundError:
+                    try:
+                        self.t.create_entity({"PartitionKey": SPEND_PARTITION, "RowKey": row, "usd": float(usd), "expires_at": spend_expires_at(day)})
+                        break
+                    except ResourceExistsError:
+                        continue  # 別のワーカーが先に作った. 読み直して足す
+                cur["usd"] = float(cur.get("usd", 0.0)) + float(usd)
+                try:
+                    self.t.update_entity(cur, mode=UpdateMode.REPLACE, etag=cur.metadata["etag"], match_condition=MatchConditions.IfNotModified)
+                    break
+                except ResourceModifiedError:
+                    continue  # 同時に更新された. 読み直して足す
+            else:
+                raise Conflict(f"spend {row}")
+
+    def spent(self, day: str, owner: str) -> tuple[float, float]:
+        out = []
+        for scope in (SPEND_ALL, spend_scope(owner)):
+            try:
+                out.append(float(self.t.get_entity(SPEND_PARTITION, f"{day}|{scope}").get("usd", 0.0)))
+            except ResourceNotFoundError:
+                out.append(0.0)
+        return out[0], out[1]

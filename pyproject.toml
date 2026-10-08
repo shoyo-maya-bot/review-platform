@@ -17,8 +17,9 @@ dependencies = [
   "pyyaml>=6,<7",
   "mcp>=2,<3",
   # 差分のレビュー（振り分け・検証・結果の読み取り）. agent-lab の auto-review をコミット SHA で固定
-  "auto-review @ git+https://github.com/shoyo-maya-bot/agent-lab.git@9a3adaaf8e29b82c2fa5776a7a6e5001dfc3ec3c#subdirectory=auto-review",
-  # LLM の呼び出し（再試行・料金表・伏せ字）. devtools-common をコミット SHA で固定（auto-review と同じ SHA にそろえる）
+  "auto-review @ git+https://github.com/shoyo-maya-bot/agent-lab.git@8408d71cf5b2a9bdebfbb2455aeb21f9b3551527#subdirectory=auto-review",
+  # LLM の呼び出し（再試行・料金表・伏せ字）. devtools-common をコミット SHA で固定（auto-review と同じ SHA にそろえる.
+  # 違う SHA にすると pip が解決できない. 28bab4c に上げるのは、auto-review が 28bab4c を固定した agent-lab を固定してから）
   "devtools-common @ git+https://github.com/shoyo-maya-bot/devtools-common.git@61ca10f418b7176741cc7977f5971f69da63960d",
 ]
 
@@ -27,7 +28,7 @@ aws = ["boto3>=1.34,<2"]
 azure = ["azure-storage-blob>=12.19,<13", "azure-storage-queue>=12.9,<13", "azure-data-tables>=12.5,<13", "azure-identity>=1.15,<2"]
 # 設計書の変換（doc2md）. ローカルで動かすとき用（pip install -e ".[tools]"）. devtools-common は doc-to-markdown と同じ SHA にそろえてある.
 # イメージでは別の venv（/opt/doc2md）に入れる（Dockerfile の DOC2MD_REF. この SHA と同じにする: tests/test_pins.py が確かめる）
-tools = ["doc-to-markdown @ git+https://github.com/shoyo-maya-bot/doc-to-markdown.git@515dbeb7f702ce0cbe8f7c8d497e55585ead9555"]
+tools = ["doc-to-markdown @ git+https://github.com/shoyo-maya-bot/doc-to-markdown.git@7e329f326abd38de8ce844aca34e429b6aae483d"]
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "moto[s3,sqs,dynamodb]>=5,<6"]
 
 [project.scripts]

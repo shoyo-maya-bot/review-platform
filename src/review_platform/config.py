@@ -96,6 +96,9 @@ class Settings:
     llm_model_standard: str = "claude-sonnet-5-5"
     llm_model_deep: str = "claude-opus-5-5"
     budget_per_job_usd: float = 1.0
+    # 1 日（UTC）の LLM 費用の上限. 全体と利用者ごと. ジョブ表と同じ共有の保存先で集計する（ワーカーが何台でも効く）. 0 なら上限なし
+    budget_daily_usd: float = 100.0
+    budget_daily_per_owner_usd: float = 20.0
     mask_pii: bool = True  # LLM に送る前にメールアドレス・電話番号を伏せる
 
     notify: str = "none"
@@ -139,6 +142,8 @@ class Settings:
             llm_model_standard=_env("RP_LLM_MODEL_STANDARD", "claude-sonnet-5-5"),
             llm_model_deep=_env("RP_LLM_MODEL_DEEP", "claude-opus-5-5"),
             budget_per_job_usd=_float("RP_BUDGET_PER_JOB_USD", 1.0),
+            budget_daily_usd=_float("RP_BUDGET_DAILY_USD", 100.0),
+            budget_daily_per_owner_usd=_float("RP_BUDGET_DAILY_PER_OWNER_USD", 20.0),
             mask_pii=_bool("RP_MASK_PII", True),
             notify=_choice("RP_NOTIFY", "none", ("none", "slack")),
             slack_webhook_url=_env("RP_SLACK_WEBHOOK_URL"),

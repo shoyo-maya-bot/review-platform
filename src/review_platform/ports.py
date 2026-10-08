@@ -43,6 +43,26 @@ class JobRepository(Protocol):
     def transition(self, job: Job, expected: JobStatus, expected_attempts: int | None = None) -> None: ...
     def list_by_owner(self, owner: str, limit: int = 20) -> list[Job]: ...
     def delete_expired(self, now_epoch: int, limit: int = 100) -> int: ...  # TTL の無い保存先のため
+    # 日次の LLM 費用（全体と利用者ごと）. 複数のワーカーで共有するため、ジョブ表と同じ保存先に置く（day は UTC の YYYY-MM-DD）
+    def add_spend(self, day: str, owner: str, usd: float) -> None: ...  # 全体と owner の両方に足す
+    def spent(self, day: str, owner: str) -> tuple[float, float]: ...  # （全体, owner）. 無ければ 0
+
+
+SPEND_ALL = "all"  # 全体の集計のキー
+SPEND_TTL_DAYS = 40  # 日次の集計を残す日数（TTL・期限切れの削除に使う）
+
+
+def spend_scope(owner: str) -> str:
+    """利用者ごとの集計のキー. 保存先のキーに使えない文字（/ # ? など）を避けるため、利用者名はハッシュにする."""
+    import hashlib
+
+    return "u-" + hashlib.sha256(owner.encode("utf-8")).hexdigest()[:32]
+
+
+def spend_expires_at(day: str) -> int:
+    from datetime import UTC, datetime, timedelta
+
+    return int((datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=UTC) + timedelta(days=SPEND_TTL_DAYS)).timestamp())
 
 
 @dataclass
