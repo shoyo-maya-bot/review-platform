@@ -151,3 +151,53 @@ def test_middleware_verifies_in_threadpool_without_blocking_event_loop():
 
     assert asyncio.run(main()) == (200, 200)
     assert seen_threads == [False]  # 検証はメインスレッド（イベントループ）の外で動いた
+
+
+# ---- 第 3 回: 件数制限の記録（hits）を古いものから消す
+
+
+def _mw(**kw):
+    from review_platform.auth import AuthMiddleware
+
+    return AuthMiddleware(lambda *a: None, None, **kw)
+
+
+def test_rate_limit_forgets_idle_principals(monkeypatch):
+    """最後の POST から 60 秒過ぎた利用者の記録は消す（以前は利用者の数だけ増え続けた）."""
+    import review_platform.auth as a
+
+    t = [1000.0]
+    monkeypatch.setattr(a.time, "monotonic", lambda: t[0])
+    mw = _mw(rate_limit_per_minute=5)
+    for i in range(100):
+        mw._rate_limited(f"u{i}")
+    assert len(mw.hits) == 100
+    t[0] += 61
+    mw._rate_limited("late")
+    assert list(mw.hits) == ["late"]
+
+
+def test_rate_limit_caps_tracked_principals_oldest_first(monkeypatch):
+    """60 秒以内でも、覚えておく利用者の数の上限を超えたら、最も長く使われていない利用者から消す."""
+    import review_platform.auth as a
+
+    t = [1000.0]
+    monkeypatch.setattr(a.time, "monotonic", lambda: t[0])
+    mw = _mw(rate_limit_per_minute=5, max_tracked=3)
+    for p in ("a", "b", "c"):
+        mw._rate_limited(p)
+        t[0] += 1
+    mw._rate_limited("a")  # a は最近使った
+    mw._rate_limited("d")
+    assert list(mw.hits) == ["c", "a", "d"]  # 最も古い b を消した
+
+
+def test_rate_limit_still_limits_after_eviction_changes(monkeypatch):
+    import review_platform.auth as a
+
+    t = [1000.0]
+    monkeypatch.setattr(a.time, "monotonic", lambda: t[0])
+    mw = _mw(rate_limit_per_minute=2)
+    assert [mw._rate_limited("x") for _ in range(3)] == [False, False, True]
+    t[0] += 61
+    assert mw._rate_limited("x") is False

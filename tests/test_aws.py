@@ -9,7 +9,7 @@ import pytest
 boto3 = pytest.importorskip("boto3")
 moto = pytest.importorskip("moto")
 
-from contract import blob_contract, queue_contract, repo_contract, spend_contract  # noqa: E402
+from contract import blob_contract, queue_contract, repo_contract, reserve_contract, spend_contract  # noqa: E402
 from review_platform.adapters.aws import OWNER_INDEX, DynamoJobRepository, S3BlobStore, SqsQueue  # noqa: E402
 
 pytestmark = pytest.mark.aws
@@ -57,6 +57,7 @@ def test_dynamodb():
     repo = DynamoJobRepository("rp-jobs", REGION)
     repo_contract(repo)
     spend_contract(repo)
+    reserve_contract(repo)  # 同時の予約の試験（reserve_race_contract）は moto がスレッドに安全でないため、local と Azurite で行う
 
 
 def test_bedrock_request_shape(monkeypatch):

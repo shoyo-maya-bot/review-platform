@@ -72,3 +72,47 @@ def spend_contract(repo) -> None:
     assert repo.spent("2026-10-08", "bob/x#1")[1] == pytest.approx(0.125)
     assert repo.spent("2026-10-09", "alice") == (0.0, 0.0)
     assert all(valid_job_id(j.job_id) for j in repo.list_by_owner("alice", 100))  # 集計の行はジョブの一覧に出ない
+
+
+def reserve_contract(repo) -> None:
+    """呼び出しの前の予約: 上限（全体・利用者ごと）を超えるなら何も足さずに超えた範囲を返す. 0 の上限は効かせない. 精算は add_spend（負もありうる）."""
+    from review_platform.ports import SPEND_OWNER, SPEND_TOTAL
+
+    day = "2026-10-10"
+    assert repo.reserve_spend(day, "alice", 0.4, 1.0, 0.5) is None
+    assert repo.spent(day, "alice") == pytest.approx((0.4, 0.4))
+    assert repo.reserve_spend(day, "alice", 0.2, 1.0, 0.5) == SPEND_OWNER  # 利用者ごと 0.6 > 0.5
+    assert repo.spent(day, "alice") == pytest.approx((0.4, 0.4))  # 超えたときは何も足さない（全体にも）
+    assert repo.reserve_spend(day, "bob", 0.5, 1.0, 0.5) is None  # 全体 0.9
+    assert repo.reserve_spend(day, "carol", 0.2, 1.0, 0.5) == SPEND_TOTAL  # 全体 1.1 > 1.0
+    assert repo.spent(day, "carol") == pytest.approx((0.9, 0.0))
+    assert repo.reserve_spend(day, "carol", 0.6, 0.0, 0.0) is None  # 上限 0 は効かせない（無料の LLM. 有料は worker が先に止める）
+    repo.add_spend(day, "alice", -0.3)  # 精算: 予約 0.4 に対して実額 0.1
+    assert repo.spent(day, "alice") == pytest.approx((1.2, 0.1))
+    assert repo.reserve_spend(day, "dave", 2.0, 5.0, 1.0) == SPEND_OWNER  # 1 回で上限を超える額（まだ行が無い）
+    assert repo.spent(day, "dave") == pytest.approx((1.2, 0.0))
+
+
+def reserve_race_contract(repo, workers: int = 8) -> None:
+    """同時に予約しても、上限に入る分しか通らない（読んでから足すまでの間に別のワーカーが割り込んでも超えない）."""
+    import threading
+
+    day, usd, limit = "2026-10-11", 0.3, 1.0  # 1.0 に入るのは 3 件まで
+    start = threading.Barrier(workers)
+    got: list[str | None] = []
+    lock = threading.Lock()
+
+    def one(i: int) -> None:
+        start.wait()
+        r = repo.reserve_spend(day, f"user{i}", usd, limit, 0.0)
+        with lock:
+            got.append(r)
+
+    ts = [threading.Thread(target=one, args=(i,)) for i in range(workers)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(timeout=60)
+    assert len(got) == workers
+    assert got.count(None) == 3
+    assert repo.spent(day, "user0")[0] == pytest.approx(0.9)

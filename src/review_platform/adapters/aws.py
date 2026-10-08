@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import boto3
@@ -10,7 +11,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from ..domain import Job, JobStatus
-from ..ports import SPEND_ALL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
+from ..ports import SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
 
 OWNER_INDEX = "owner-job-index"  # infra/aws の DynamoDB と同じ名前
 _RETRY = Config(retries={"max_attempts": 5, "mode": "standard"}, connect_timeout=5, read_timeout=30)
@@ -88,6 +89,7 @@ class DynamoJobRepository:
 
     日次の費用も同じ表に置く（job_id = `spend#<日付>#<all か利用者のハッシュ>`、owner を持たないので一覧の GSI には出ない）.
     足すのは UpdateItem の ADD（複数のワーカーが同時に足しても失われない）. expires_at の TTL で消える.
+    呼び出しの前の予約（reserve_spend）は、全体と利用者の 2 つの項目を TransactWriteItems で「足した後も上限以下」を条件に一度に足す.
     """
 
     def __init__(self, table: str, region: str, endpoint_url: str = ""):
@@ -161,6 +163,40 @@ class DynamoJobRepository:
                 UpdateExpression="ADD usd :u SET expires_at = :e",
                 ExpressionAttributeValues={":u": {"N": repr(float(usd))}, ":e": {"N": str(spend_expires_at(day))}},
             )
+
+    def reserve_spend(self, day: str, owner: str, usd: float, limit_total: float, limit_owner: float, attempts: int = 5) -> str | None:
+        scopes = ((SPEND_ALL, limit_total, SPEND_TOTAL), (spend_scope(owner), limit_owner, SPEND_OWNER))
+        for _, limit, label in scopes:
+            if limit and usd > limit:  # 項目がまだ無いときの条件（attribute_not_exists）で通らないよう、先に弾く
+                return label
+        items = []
+        for scope, limit, _ in scopes:
+            update: dict[str, Any] = {
+                "TableName": self.table,
+                "Key": self._spend_key(day, scope),
+                "UpdateExpression": "ADD usd :u SET expires_at = :e",
+                "ExpressionAttributeValues": {":u": {"N": repr(float(usd))}, ":e": {"N": str(spend_expires_at(day))}},
+            }
+            if limit:
+                update["ConditionExpression"] = "attribute_not_exists(usd) OR usd <= :max"
+                update["ExpressionAttributeValues"][":max"] = {"N": repr(float(limit) - float(usd))}
+            items.append({"Update": update})
+        for attempt in range(attempts):
+            try:
+                self.ddb.transact_write_items(TransactItems=items)
+                return None
+            except ClientError as e:
+                if _code(e) != "TransactionCanceledException":
+                    raise
+                codes = [str(r.get("Code", "")) for r in e.response.get("CancellationReasons") or []]
+                for (_, _, label), code in zip(scopes, codes, strict=False):
+                    if code == "ConditionalCheckFailed":
+                        return label
+                if "TransactionConflict" not in codes or attempt == attempts - 1:
+                    raise  # 条件以外の取り消し. 呼び出し側で一時的な失敗としてやり直す
+                # 別のワーカーの予約と同時だった. 少し待って同じ条件でやり直す（条件は足した後の額で見るので、やり直しても超えない）
+                time.sleep(0.05 * (attempt + 1))
+        return None
 
     def spent(self, day: str, owner: str) -> tuple[float, float]:
         out = []

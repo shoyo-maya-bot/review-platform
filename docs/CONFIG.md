@@ -15,7 +15,7 @@
 | `RP_ALLOWED_EXTENSIONS` | `.xlsx,.xlsm,.docx,.pptx,.pdf,.md,.diff,.patch` | 受け付ける拡張子 |
 | `RP_JOB_TTL_DAYS` | `30` | ジョブと結果を消すまでの日数（AWS は DynamoDB の TTL、Azure はワーカーが表の行を消す。S3・Blob はライフサイクルでも消す） |
 | `RP_PUBLIC_BASE_URL` | （空） | 結果の URL を通知に載せるときの基準 URL. MCP はこの Host 以外からの要求を断る（DNS リバインディング対策） |
-| `RP_RATE_LIMIT_PER_MINUTE` | `30` | 1 人が 1 分間に送れる件数（API と MCP の POST）. 1 台ごとの数え方 |
+| `RP_RATE_LIMIT_PER_MINUTE` | `30` | 1 人が 1 分間に送れる件数（API と MCP の POST）. 1 台ごとの数え方. 数えるための記録は、最後の POST から 60 秒過ぎた利用者のものを消し、1 万人を超えたら最も長く使われていない利用者から消す（メモリが増え続けない） |
 
 ## 認証（API と MCP）
 
@@ -74,7 +74,7 @@
 | `RP_LLM_MODEL_STANDARD` | `claude-sonnet-5-5` | ふだんのレビューのモデル。Bedrock では推論プロファイル ID |
 | `RP_LLM_MODEL_DEEP` | `claude-opus-5-5` | 検証に使う上位モデル。空なら検証しない |
 | `RP_BUDGET_PER_JOB_USD` | `0` | 1 ジョブの費用の上限. **`0`（既定）なら有料の LLM（`anthropic`・`bedrock`）は一切呼ばない**（下の注を参照）. やり直しをまたいで足し上げる（見積もりで超えそうなら上位モデルを省き、ふだんのレビューも超えるなら呼ばずに failed. 設計書・差分のどちらも、最初の呼び出しの前に見積もりで確かめる） |
-| `RP_BUDGET_DAILY_USD` | `0` | 1 日（UTC）の LLM 費用の上限（全体）. **`0`（既定）なら有料の LLM は呼ばない**（上限なしではない）. ジョブ表と同じ共有の保存先（SQLite・DynamoDB・Table Storage）で集計するので、ワーカーが何台でも効く. 達したら LLM を呼ばずに failed. 1 ジョブで使える予算は、1 ジョブの上限の残りと日次の上限の残りの小さい方 |
+| `RP_BUDGET_DAILY_USD` | `0` | 1 日（UTC）の LLM 費用の上限（全体）. **`0`（既定）なら有料の LLM は呼ばない**（上限なしではない）. ジョブ表と同じ共有の保存先（SQLite・DynamoDB・Table Storage）で集計するので、ワーカーが何台でも効く. LLM を 1 回呼ぶごとに、呼ぶ前に見積もり額（伏せ字の後の入力 + 出力は上限いっぱい）を集計に**予約**し（条件付き更新: SQLite は書き込みトランザクション、DynamoDB は `TransactWriteItems` の条件、Table Storage は同じパーティションの ETag 付きトランザクション. 複数のワーカーが同時に呼んでも上限を超えない）、呼んだ後に実額との差を精算する. 予約できなければ LLM を呼ばずに failed（検証段なら一次の結果を残す）. 1 ジョブで使える予算は、1 ジョブの上限の残りと日次の上限の残りの小さい方. 呼び出し中は予約額が集計に入っているので、同時に動くジョブが多いと上限の手前で断ることがある（安全側） |
 | `RP_BUDGET_DAILY_PER_OWNER_USD` | `0` | 1 日（UTC）の LLM 費用の上限（利用者ごと）. **`0`（既定）なら有料の LLM は呼ばない**. 扱いは `RP_BUDGET_DAILY_USD` と同じ |
 | `RP_MASK_PII` | `1` | `1`（既定）なら、LLM に送る前に設計書・差分・プロンプトの中のメールアドレスと電話番号（日本の形式。全角・区切りなし・`+81` を含む）を `＊＊＊` に置き換える（`devtools_common.llm.Masker`）。`anthropic`・`bedrock`・`fake` のすべてに効く。`0` で止める（メールアドレスの検査そのものをレビューしたいときなど）。詳しくは [SECURITY.md](SECURITY.md) |
 

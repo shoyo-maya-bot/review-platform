@@ -18,5 +18,6 @@
 - 秘密情報（API キー・トークン・Webhook の URL）はリポジトリに置かない. `.env`（コミットしない）か、実行環境のシークレットで渡す
 - GitHub Actions はコミット SHA で固定し、依存は Dependabot で更新する
 - AI が書いた出力は下書き. 人が確かめてから使う
+- LLM の費用の上限の既定は 0（有料の LLM を呼ばない）. 日次の上限は、呼び出しの前に見積もり額を共有の保存先に予約して（条件付き更新）、複数のワーカーでも超えないようにする（[docs/CONFIG.md](docs/CONFIG.md)）
 
 脅威と対策の詳細は [docs/SECURITY.md](docs/SECURITY.md) を見てください。

@@ -14,7 +14,7 @@ import hmac
 import json
 import threading
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 
 import jwt
 from starlette.concurrency import run_in_threadpool
@@ -23,6 +23,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from .config import Settings
 
 PUBLIC_PATHS = ("/healthz",)
+MAX_TRACKED_PRINCIPALS = 10_000  # 件数制限のために覚えておく利用者の数の上限（超えたら最も長く使われていない利用者から忘れる）
 
 
 class AuthError(Exception):
@@ -119,21 +120,38 @@ async def _json(send: Send, status: int, body: dict, headers: list[tuple[bytes, 
 
 
 class AuthMiddleware:
-    def __init__(self, app: ASGIApp, verifier, rate_limit_per_minute: int = 30):
+    def __init__(self, app: ASGIApp, verifier, rate_limit_per_minute: int = 30, max_tracked: int = MAX_TRACKED_PRINCIPALS):
         self.app = app
         self.verifier = verifier
         self.limit = rate_limit_per_minute
-        self.hits: dict[str, deque[float]] = defaultdict(deque)
+        self.max_tracked = max_tracked
+        # 利用者ごとの POST の時刻. 最近使った順（OrderedDict の末尾が最新）. 古いものから消す（_evict）
+        self.hits: OrderedDict[str, deque[float]] = OrderedDict()
+        self._lock = threading.Lock()
 
     def _rate_limited(self, principal: str) -> bool:
         now = time.monotonic()
-        q = self.hits[principal]
-        while q and now - q[0] > 60:
-            q.popleft()
-        if len(q) >= self.limit:
-            return True
-        q.append(now)
-        return False
+        with self._lock:
+            q = self.hits.get(principal)
+            if q is None:
+                q = self.hits[principal] = deque()
+            while q and now - q[0] > 60:
+                q.popleft()
+            limited = len(q) >= self.limit
+            if not limited:
+                q.append(now)
+            self.hits.move_to_end(principal)  # 最近使った順に並べる（古いものから消すため）
+            self._evict(now)
+            return limited
+
+    def _evict(self, now: float) -> None:
+        """利用者ごとの記録が増え続けないよう、古いものから消す. 最後の POST から 60 秒過ぎた利用者は消す（もう数えない）.
+        それでも MAX_TRACKED を超えるなら、最も長く使われていない利用者から消す."""
+        while self.hits:
+            oldest, q = next(iter(self.hits.items()))
+            if q and now - q[-1] <= 60 and len(self.hits) <= self.max_tracked:
+                break
+            del self.hits[oldest]
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope["path"] in PUBLIC_PATHS:

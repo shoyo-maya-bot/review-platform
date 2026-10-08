@@ -3,6 +3,7 @@
 Storage Queue には DLQ が無いので、受信回数が上限を超えたメッセージは `<キュー名>-poison` に移す.
 Table Storage には TTL が無いので、期限切れの行はワーカーが定期的に消す（delete_expired）.
 日次の費用は同じ表の別のパーティション（spend）に置き、ETag の条件付き更新で足す（同時に足しても失われない）.
+呼び出しの前の予約（reserve_spend）は、全体と利用者の 2 行を同じパーティションのトランザクション（ETag 付き）で一度に足す.
 """
 
 from __future__ import annotations
@@ -13,12 +14,12 @@ from typing import Any
 
 from azure.core import MatchConditions
 from azure.core.exceptions import ResourceExistsError, ResourceModifiedError, ResourceNotFoundError
-from azure.data.tables import TableClient, UpdateMode
+from azure.data.tables import TableClient, TableTransactionError, UpdateMode
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.storage.queue import QueueClient
 
 from ..domain import Job, JobStatus
-from ..ports import SPEND_ALL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
+from ..ports import SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
 
 PARTITION = "job"
 SPEND_PARTITION = "spend"
@@ -180,6 +181,31 @@ class AzureJobRepository:
                     continue  # 同時に更新された. 読み直して足す
             else:
                 raise Conflict(f"spend {row}")
+
+    def reserve_spend(self, day: str, owner: str, usd: float, limit_total: float, limit_owner: float, attempts: int = 10) -> str | None:
+        scopes = ((SPEND_ALL, limit_total, SPEND_TOTAL), (spend_scope(owner), limit_owner, SPEND_OWNER))
+        for _ in range(attempts):
+            ops: list[tuple] = []
+            for scope, limit, label in scopes:
+                row = f"{day}|{scope}"
+                try:
+                    cur = self.t.get_entity(SPEND_PARTITION, row)
+                except ResourceNotFoundError:
+                    cur = None
+                used = float(cur.get("usd", 0.0)) if cur is not None else 0.0
+                if limit and used + usd > limit + 1e-9:
+                    return label
+                if cur is None:
+                    ops.append(("create", {"PartitionKey": SPEND_PARTITION, "RowKey": row, "usd": float(usd), "expires_at": spend_expires_at(day)}))
+                else:
+                    cur["usd"] = used + float(usd)
+                    ops.append(("update", cur, {"mode": UpdateMode.REPLACE, "etag": cur.metadata["etag"], "match_condition": MatchConditions.IfNotModified}))
+            try:
+                self.t.submit_transaction(ops)  # 2 行とも同じパーティション. どちらかが読んだ後に変わっていれば両方とも書かない
+                return None
+            except (TableTransactionError, ResourceModifiedError, ResourceExistsError):
+                continue  # 同時に更新された. 読み直して確かめ直す
+        raise Conflict(f"spend reserve {day}")
 
     def spent(self, day: str, owner: str) -> tuple[float, float]:
         out = []
