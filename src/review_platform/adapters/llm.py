@@ -52,9 +52,12 @@ def _result_text(content: list[dict], schema: dict | None) -> str:
 
 
 class LLMError(RuntimeError):
-    def __init__(self, message: str, retryable: bool = False):
+    """LLM の呼び出しの失敗. cost_usd は、失敗しても窓口が課金した分（出力が max_tokens で切れたときなど）. 費用の集計に足す."""
+
+    def __init__(self, message: str, retryable: bool = False, cost_usd: float = 0.0):
         super().__init__(message)
         self.retryable = retryable
+        self.cost_usd = cost_usd
 
 
 def canonical_model(model: str) -> str:
@@ -84,9 +87,17 @@ def cost(model: str, input_tokens: int, output_tokens: int, cache_write_tokens: 
     return (input_tokens * p.input + output_tokens * p.output + cache_write_tokens * p.cache_write + cache_read_tokens * p.cache_read) / 1_000_000
 
 
-def _check_stop(stop_reason: str) -> None:
+def _check_stop(stop_reason: str, cost_usd: float = 0.0) -> None:
     if stop_reason == "max_tokens":
-        raise LLMError("出力が上限で切れました（max_tokens）. 結果は使えません", retryable=False)
+        # 切れた呼び出しも課金される. 費用を持たせて、ジョブ・日次の集計から漏らさない
+        raise LLMError("出力が上限で切れました（max_tokens）. 結果は使えません", retryable=False, cost_usd=cost_usd)
+
+
+def _usage_cost(model: str, usage: Any, reported: float | None = None) -> float:
+    """usage（devtools_common.llm.Usage）からの費用. 窓口・共通の料金表が出した値があればそれを使う."""
+    if reported is not None:
+        return reported
+    return cost(model, usage.input_tokens, usage.output_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens)
 
 
 def _mask(masker: Masker | None, system: str, user: str) -> tuple[str, str]:
@@ -163,7 +174,12 @@ class AnthropicLLM:
         try:
             comp = self.client(model).complete(user, system=system, max_tokens=max_tokens, **_tool_args(schema))
         except dc.MaxTokensError as e:
-            raise LLMError(f"出力が上限で切れました（max_tokens）. 結果は使えません（request-id {e.completion.request_id}）", retryable=False) from e
+            c = e.completion
+            raise LLMError(
+                f"出力が上限で切れました（max_tokens）. 結果は使えません（request-id {c.request_id}）",
+                retryable=False,
+                cost_usd=_usage_cost(model, c.usage, c.cost_usd),
+            ) from e
         except dc.APIStatusError as e:
             raise LLMError(f"LLM の API が {e.status} を返しました: {_safe(str(e))}", retryable=e.status in RETRYABLE_STATUS) from e
         except dc.APIConnectionError as e:
@@ -172,7 +188,7 @@ class AnthropicLLM:
             raise LLMError(f"LLM の呼び出しに失敗しました: {_safe(str(e))}") from e
         u = comp.usage
         tin = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
-        price = comp.cost_usd if comp.cost_usd is not None else cost(model, u.input_tokens, u.output_tokens, u.cache_creation_input_tokens, u.cache_read_input_tokens)
+        price = _usage_cost(model, u, comp.cost_usd)
         text = _result_text(list(comp.content), schema)
         return LLMReply(text=text, input_tokens=tin, output_tokens=u.output_tokens, cost_usd=price, stop_reason=str(comp.stop_reason or ""), request_id=comp.request_id or "")
 
@@ -235,7 +251,7 @@ def _reply(model: str, data: dict, request_id: str = "", duration_ms: int = 0, s
             }
         },
     )
-    _check_stop(stop)
+    _check_stop(stop, price)
     return LLMReply(text=text, input_tokens=tin, output_tokens=u.output_tokens, cost_usd=price, stop_reason=stop, request_id=request_id)
 
 
