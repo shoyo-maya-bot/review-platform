@@ -75,10 +75,13 @@ class _CostMeter:
         from .adapters.llm import LLMError
 
         held = 0.0
+        # 予約と精算は同じ日付キーにする（UTC の日付をまたいで呼び出しが終わっても、予約した日の集計で精算する.
+        # 以前は精算のときに日付を取り直していたので、予約額が前の日に残り、次の日の集計が負にずれた）
+        day = _today()
         if self.reserve and self.repo is not None:
             held = self.estimate(model, system, user, max_tokens)
             try:
-                over = self.repo.reserve_spend(_today(), self.owner, held, *self.limits)
+                over = self.repo.reserve_spend(day, self.owner, held, *self.limits)
             except Exception as e:  # noqa: BLE001 - 集計の保存先の失敗. 呼ばずに、一時的な失敗としてやり直す
                 raise LLMError(f"日次の費用の予約に失敗しました（{type(e).__name__}）", retryable=True) from e
             if over:
@@ -90,20 +93,20 @@ class _CostMeter:
             # 失敗しても課金された分（出力が max_tokens で切れた、など. LLMError.cost_usd）を数える
             used = float(getattr(e, "cost_usd", 0.0) or 0.0)
             self.spent += used
-            self._settle(used, held)
+            self._settle(day, used, held)
             raise
         self.spent += r.cost_usd
-        self._settle(r.cost_usd, held)
+        self._settle(day, r.cost_usd, held)
         return r
 
-    def _settle(self, used: float, held: float) -> None:
+    def _settle(self, day: str, used: float, held: float) -> None:
         """日次の集計を実額にそろえる（予約していれば差額を足す. 負もありうる）. 集計の失敗でジョブを失敗・やり直しにしない
-        （二重に費用をかけないため）. ログに残す."""
+        （二重に費用をかけないため）. ログに残す. day は予約したときの日付（呼び出しの前に決めたもの）."""
         delta = used - held
         if self.repo is None or abs(delta) < 1e-12:
             return
         try:
-            self.repo.add_spend(_today(), self.owner, delta)
+            self.repo.add_spend(day, self.owner, delta)
         except Exception:  # noqa: BLE001
             log.exception("daily spend not recorded", extra={"cost_usd": used, "reserved_usd": held})
 
@@ -239,10 +242,11 @@ class Worker:
                 extra={"job_id": job.job_id, "attempt": job.attempts, "error": type(e).__name__, "cost_usd": job.cost_usd},
                 exc_info=level == logging.ERROR,
             )
+            why = _reason(e)
             if job.attempts >= MAX_ATTEMPTS:
-                self._finish(job, m, JobStatus.FAILED, error=f"やり直しても失敗しました（{type(e).__name__}）")
+                self._finish(job, m, JobStatus.FAILED, error=f"やり直しても失敗しました（{why}）"[:500])
                 return
-            job.status, job.error, job.updated_at = JobStatus.QUEUED, f"一時的な失敗のため再試行します（{type(e).__name__}）", iso(now())
+            job.status, job.error, job.updated_at = JobStatus.QUEUED, f"一時的な失敗のため再試行します（{why}）"[:500], iso(now())
             try:
                 self.repo.transition(job, expected=JobStatus.RUNNING, expected_attempts=job.attempts)
             except Conflict:
@@ -337,6 +341,14 @@ class Worker:
         self.blobs.put(job.report_json_key, json.dumps(rep, ensure_ascii=False, indent=1).encode("utf-8"), "application/json")
         self.blobs.put(job.report_md_key, report.markdown(rep).encode("utf-8"), "text/markdown; charset=utf-8")
         return rep
+
+
+def _reason(e: BaseException) -> str:
+    """ジョブのエラーに残す理由. RetryableError はこのパッケージが作った文（doc2md の stderr の要点・LLM の失敗. 伏せ字済み）なので中身も残す.
+    想定外の例外は、中身に何が入るか分からないので型の名前だけ."""
+    if isinstance(e, RetryableError) and str(e):
+        return f"{type(e).__name__}: {str(e)[:400]}"
+    return type(e).__name__
 
 
 def _lease_active(job: Job) -> bool:

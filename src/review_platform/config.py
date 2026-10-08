@@ -112,6 +112,9 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 8080
     forwarded_allow_ips: str = "127.0.0.1"
+    # HTTP の keep-alive（秒）. ロードバランサーの後ろに置くときは、そのアイドルタイムアウトより長くする
+    # （短いと、ロードバランサーが使い回そうとした接続をアプリが先に閉じて 502 になる. Terraform の AWS は alb_idle_timeout + 5 を渡す）
+    keep_alive_seconds: int = 65
 
     @staticmethod
     def from_env() -> Settings:
@@ -155,6 +158,7 @@ class Settings:
             host=_env("RP_HOST", "127.0.0.1"),
             port=_int("RP_PORT", 8080, 1, 65535),
             forwarded_allow_ips=_env("RP_FORWARDED_ALLOW_IPS", "127.0.0.1"),
+            keep_alive_seconds=_int("RP_KEEP_ALIVE_SECONDS", 65, 1, 4100),
         )
         s.validate()
         return s

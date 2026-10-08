@@ -33,6 +33,10 @@ INSTRUCTIONS = """\
 説明を読んで、引数を直すか、待ってからやり直してください。
 """
 
+# get_job が 1 回の呼び出しで待つ最大の秒数. 前に置くロードバランサーのアイドルタイムアウトはこれより十分長くする
+# （infra/aws/variables.tf の alb_idle_timeout. 既定 300 秒・最小 150 秒. tests/test_timeouts.py が確かめる）
+GET_JOB_MAX_WAIT_SECONDS = 120
+
 # 送る道具: ジョブを 1 件増やすだけ（上書き・削除はしない）. 呼ぶたびに新しいジョブになる
 SUBMIT = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 # 読む道具: 自分のジョブを読むだけ
@@ -104,7 +108,7 @@ def build_mcp(s: Settings, svc: Services) -> MCPServer:
     async def get_job(job_id: str, ctx: Context, wait_seconds: int = 0) -> dict:
         """ジョブの状態を返す. wait_seconds（最大 120）を指定すると、終わるまでその秒数だけ待つ."""
         owner = _owner(ctx)
-        deadline = asyncio.get_running_loop().time() + max(0, min(wait_seconds, 120))
+        deadline = asyncio.get_running_loop().time() + max(0, min(wait_seconds, GET_JOB_MAX_WAIT_SECONDS))
         while True:
             try:
                 job = await run_sync(svc.get_for, owner, job_id)
