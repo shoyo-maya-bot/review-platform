@@ -239,10 +239,11 @@ class Worker:
                 extra={"job_id": job.job_id, "attempt": job.attempts, "error": type(e).__name__, "cost_usd": job.cost_usd},
                 exc_info=level == logging.ERROR,
             )
+            why = _reason(e)
             if job.attempts >= MAX_ATTEMPTS:
-                self._finish(job, m, JobStatus.FAILED, error=f"やり直しても失敗しました（{type(e).__name__}）")
+                self._finish(job, m, JobStatus.FAILED, error=f"やり直しても失敗しました（{why}）"[:500])
                 return
-            job.status, job.error, job.updated_at = JobStatus.QUEUED, f"一時的な失敗のため再試行します（{type(e).__name__}）", iso(now())
+            job.status, job.error, job.updated_at = JobStatus.QUEUED, f"一時的な失敗のため再試行します（{why}）"[:500], iso(now())
             try:
                 self.repo.transition(job, expected=JobStatus.RUNNING, expected_attempts=job.attempts)
             except Conflict:
@@ -337,6 +338,14 @@ class Worker:
         self.blobs.put(job.report_json_key, json.dumps(rep, ensure_ascii=False, indent=1).encode("utf-8"), "application/json")
         self.blobs.put(job.report_md_key, report.markdown(rep).encode("utf-8"), "text/markdown; charset=utf-8")
         return rep
+
+
+def _reason(e: BaseException) -> str:
+    """ジョブのエラーに残す理由. RetryableError はこのパッケージが作った文（doc2md の stderr の要点・LLM の失敗. 伏せ字済み）なので中身も残す.
+    想定外の例外は、中身に何が入るか分からないので型の名前だけ."""
+    if isinstance(e, RetryableError) and str(e):
+        return f"{type(e).__name__}: {str(e)[:400]}"
+    return type(e).__name__
 
 
 def _lease_active(job: Job) -> bool:

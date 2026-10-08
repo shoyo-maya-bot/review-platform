@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,14 +67,42 @@ def to_markdown(filename: str, data: bytes, workdir: Path, runner: ToolRunner | 
     report = workdir / "doc2md-report.json"
     code, _stdout, stderr = runner.run(["doc2md", str(src), "-d", str(out), "-f", "json", "-o", str(report)], workdir, DOC2MD_TIMEOUT)
     warnings = _warnings(report)
-    if code == 3:
-        raise RetryableError(f"doc2md の実行時エラー: {stderr.strip()[-300:]}")
     if code == 2:
-        raise PermanentError(f"doc2md: 入力か環境の誤り（終了コード 2）: {stderr.strip()[-300:]}")
+        # 壊れた入力（拡張子だけ Office のテキスト、途中で切れた zip 等）・使い方の誤り. 同じ入力でやり直しても変わらないので再試行しない
+        raise PermanentError(f"doc2md: 入力の誤りのため変換できませんでした（終了コード 2）: {stderr_summary(stderr, workdir)}")
+    if code == 3:
+        raise RetryableError(f"doc2md の実行時エラー（終了コード 3）: {stderr_summary(stderr, workdir)}")
     mds = sorted(out.glob("*.md"))
     if code == 1 or not mds:
         raise PermanentError("doc2md: 変換できませんでした" + (f"（{'; '.join(warnings[:3])}）" if warnings else ""))
     return Conversion(markdown=mds[0].read_text(encoding="utf-8"), warnings=warnings)
+
+
+_ERROR_LINE = re.compile(r"^error:\s*", re.M)
+STDERR_SUMMARY_MAX = 300
+
+
+def stderr_summary(stderr: str, workdir: Path | None = None) -> str:
+    """doc2md の stderr から、ジョブのエラーに残す要点を作る.
+
+    - `error: ...` の行（devtools-common の run_main が書く理由）があれば最後のものを、無ければ最後の空でない行を使う
+    - 作業フォルダ（一時フォルダ）のパスは外す（ファイル名だけ残す）
+    - メールアドレス・電話番号は伏せる（devtools_common.llm.Masker. RP_MASK_PII に依らず、ジョブのエラーは常に伏せる）
+    """
+    from devtools_common.llm import Masker
+
+    lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+    errors = [ln for ln in lines if _ERROR_LINE.match(ln)]
+    line = _ERROR_LINE.sub("", errors[-1]) if errors else (lines[-1] if lines else "")
+    if workdir is not None:
+        for base in {str(workdir), workdir.as_posix()}:
+            for sub in ("input", "out"):
+                line = line.replace(f"{base}{os.sep}{sub}{os.sep}", "").replace(f"{base}/{sub}/", "")
+            line = line.replace(base, "")
+    line = Masker().text(line)
+    if len(line) > STDERR_SUMMARY_MAX:
+        line = line[: STDERR_SUMMARY_MAX - 1] + "…"
+    return line or "（理由は出力されませんでした）"
 
 
 def _warnings(report: Path) -> list[str]:
