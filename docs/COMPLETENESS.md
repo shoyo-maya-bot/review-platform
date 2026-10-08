@@ -17,8 +17,9 @@
 | MCP（本物の HTTP の上で公式 SDK から 5 つの道具。他人のジョブが見えない・認証なしで 401） | `tests/test_mcp.py` | 同上 |
 | CLI・LLM の再試行とエラー・通知の無害化・ログ | `tests/test_cli_llm_notify.py` | 同上 |
 | 3 つの実装の振る舞いがそろう | `tests/contract.py` を local・moto（AWS）・Azurite（Azure）に流す | test (Linux) |
-| 試験の網羅率 85% 以上 | `pytest --cov-fail-under=85` | test (Linux, 3.11 / 3.12) |
+| 試験の網羅率 85% 以上 | `pytest --cov-fail-under=85` | test (Linux, 3.11 / 3.12 / 3.14) |
 | Windows で動く | 同じ試験（Azurite を除く） | test (Windows) |
+| 静的解析・依存の脆弱性 | bandit（中以上）・pip-audit | test (Linux) |
 | コンテナで通しに動く | `scripts/e2e.sh`: compose で起動 → 送る → 結果 → MCP の `tools/list` | e2e (local / aws / azure) |
 | Terraform の文法と設定 | `terraform fmt -check`・`validate`・tflint | terraform (aws / azure) |
 | IaC の危ない設定 | trivy config（例外は `.trivyignore` に理由つき） | trivy config |

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +11,28 @@ from pathlib import Path
 from . import PermanentError, RetryableError
 
 DOC2MD_TIMEOUT = 600
+
+# 子プロセス（doc2md）に渡す環境変数. API キーなどの秘密を受け継がせないよう、決まったものだけを渡す
+CHILD_ENV_NAMES = (
+    "PATH", "HOME", "USERPROFILE", "TEMP", "TMP", "TMPDIR", "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TZ",
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA",  # Windows で Python・LibreOffice が動くのに要る
+    "PYTHONIOENCODING", "PYTHONUTF8", "VIRTUAL_ENV",
+)  # fmt: skip
+CHILD_ENV_PREFIXES = ("DEVTOOLS_", "DOC2MD_")
+# DEVTOOLS_* でも、秘密らしい名前は渡さない
+_SECRET_HINTS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+
+
+def child_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """doc2md に渡す環境変数. 決まった名前と DEVTOOLS_*・DOC2MD_* だけ（秘密らしい名前は除く）."""
+    src = os.environ if environ is None else environ
+    names = {n.upper() for n in CHILD_ENV_NAMES}
+    out = {}
+    for k, v in src.items():
+        up = k.upper()
+        if up in names or (up.startswith(CHILD_ENV_PREFIXES) and not any(h in up for h in _SECRET_HINTS)):
+            out[k] = v
+    return out
 
 
 @dataclass
@@ -23,7 +46,7 @@ class ToolRunner:
 
     def run(self, args: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
         try:
-            p = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False)
+            p = subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False, env=child_env())
         except FileNotFoundError as e:
             raise PermanentError(f"{args[0]} が見つかりません（イメージに入っていない）") from e
         except subprocess.TimeoutExpired as e:

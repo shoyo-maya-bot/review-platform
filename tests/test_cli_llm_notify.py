@@ -244,3 +244,28 @@ def test_factory_selection():
     assert llm(replace(s, llm="anthropic", anthropic_api_key="k")).name == "anthropic"
     assert type(notifier(s)).__name__ == "NoNotifier"
     assert type(notifier(replace(s, notify="slack", slack_webhook_url="https://x"))).__name__ == "SlackNotifier"
+
+
+def test_anthropic_structured_output_forces_tool_and_returns_its_input():
+    from auto_review.findings import FINDINGS_SCHEMA
+
+    body = {
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "tool_use", "id": "t1", "name": "submit_review", "input": {"findings": [{"severity": "MUST", "title": "t"}]}}],
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+        "stop_reason": "tool_use",
+    }
+    server = _Server((200, body, {}))
+    r = _anthropic(server).complete("claude-sonnet-5-5", "s", "u", 100, schema=FINDINGS_SCHEMA)
+    assert json.loads(r.text) == {"findings": [{"severity": "MUST", "title": "t"}]}
+    sent = server.body(0)
+    assert sent["tool_choice"] == {"type": "tool", "name": "submit_review"} and sent["tools"][0]["input_schema"] == FINDINGS_SCHEMA
+
+
+def test_anthropic_structured_output_without_tool_is_unreadable():
+    """道具を使わず文章で返したら、読む側でスキーマに合わないとして失敗にする（黙って 0 件にしない）."""
+    from auto_review.findings import FINDINGS_SCHEMA, UnreadableOutput, load_output
+
+    r = _anthropic(_Server(_ok("findings はありません"))).complete("claude-sonnet-5-5", "s", "u", 100, schema=FINDINGS_SCHEMA)
+    with pytest.raises(UnreadableOutput):
+        load_output(r.text, FINDINGS_SCHEMA)

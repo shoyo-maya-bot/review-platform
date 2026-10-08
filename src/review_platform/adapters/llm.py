@@ -6,6 +6,8 @@
   推論プロファイルの ARN）も同じ表で引く。表に無いモデルは高い側（UNKNOWN_PRICE）で見積もる
 - 出力が上限で切れた（stop_reason=max_tokens）ときは、指摘 0 件と区別できるよう LLMError にする
 - masker を渡すと、送る前に system と user の中のメールアドレス・電話番号を伏せる（factory が RP_MASK_PII で決める）
+- schema を渡すと、そのスキーマを入力にした道具（RESULT_TOOL）を 1 つだけ渡して必ず使わせる（構造化出力）. 道具の入力を JSON の文字列で返す.
+  道具を使わなかった返答は、読む側（auto_review.findings.load_output）がスキーマに合わないとして失敗にする
 """
 
 from __future__ import annotations
@@ -29,6 +31,24 @@ __all__ = ["PRICES", "UNKNOWN_PRICE", "AnthropicLLM", "BedrockLLM", "FakeLLM", "
 # 料金表に無いモデルの見積もりに使う単価（USD / 100 万トークン）. 現行の最上位モデル（claude-opus-5-5）と同じ高い側で見積もる
 UNKNOWN_PRICE = (4.0, 20.0)
 RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504, 529})
+RESULT_TOOL = "submit_review"
+
+
+def _tool_args(schema: dict | None) -> dict[str, Any]:
+    """構造化出力のための tools / tool_choice. schema が無ければ空."""
+    if schema is None:
+        return {}
+    tool = {"name": RESULT_TOOL, "description": "レビューの結果を、この道具の入力として返す。スキーマに厳密に従う。", "input_schema": schema}
+    return {"tools": [tool], "tool_choice": {"type": "tool", "name": RESULT_TOOL}}
+
+
+def _result_text(content: list[dict], schema: dict | None) -> str:
+    """返答の本文. schema があれば道具の入力を JSON の文字列にする（道具を使っていなければ文章をそのまま返し、読む側で失敗にする）."""
+    if schema is not None:
+        for c in content:
+            if c.get("type") == "tool_use" and c.get("name") == RESULT_TOOL:
+                return json.dumps(c.get("input"), ensure_ascii=False)
+    return "".join(c.get("text", "") for c in content if c.get("type") == "text")
 
 
 class LLMError(RuntimeError):
@@ -76,7 +96,7 @@ def _mask(masker: Masker | None, system: str, user: str) -> tuple[str, str]:
 class NoLLM:
     name = "none"
 
-    def complete(self, model: str, system: str, user: str, max_tokens: int) -> LLMReply:
+    def complete(self, model: str, system: str, user: str, max_tokens: int, schema: dict | None = None) -> LLMReply:
         raise LLMError("RP_LLM=none のため、AI レビューは行いません")
 
 
@@ -90,9 +110,9 @@ class FakeLLM:
         self.masker = masker
         self.calls: list[dict] = []
 
-    def complete(self, model: str, system: str, user: str, max_tokens: int) -> LLMReply:
+    def complete(self, model: str, system: str, user: str, max_tokens: int, schema: dict | None = None) -> LLMReply:
         system, user = _mask(self.masker, system, user)
-        self.calls.append({"model": model, "system": system, "user": user, "max_tokens": max_tokens})
+        self.calls.append({"model": model, "system": system, "user": user, "max_tokens": max_tokens, "schema": schema})
         text = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
         tin, tout = len(system + user) // 3, len(text) // 3
         return LLMReply(text=text, input_tokens=tin, output_tokens=tout, cost_usd=cost(model, tin, tout))
@@ -139,9 +159,9 @@ class AnthropicLLM:
             )
         return self._clients[model]
 
-    def complete(self, model: str, system: str, user: str, max_tokens: int) -> LLMReply:
+    def complete(self, model: str, system: str, user: str, max_tokens: int, schema: dict | None = None) -> LLMReply:
         try:
-            comp = self.client(model).complete(user, system=system, max_tokens=max_tokens)
+            comp = self.client(model).complete(user, system=system, max_tokens=max_tokens, **_tool_args(schema))
         except dc.MaxTokensError as e:
             raise LLMError(f"出力が上限で切れました（max_tokens）. 結果は使えません（request-id {e.completion.request_id}）", retryable=False) from e
         except dc.APIStatusError as e:
@@ -153,7 +173,8 @@ class AnthropicLLM:
         u = comp.usage
         tin = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
         price = comp.cost_usd if comp.cost_usd is not None else cost(model, u.input_tokens, u.output_tokens, u.cache_creation_input_tokens, u.cache_read_input_tokens)
-        return LLMReply(text=comp.text, input_tokens=tin, output_tokens=u.output_tokens, cost_usd=price, stop_reason=str(comp.stop_reason or ""), request_id=comp.request_id or "")
+        text = _result_text(list(comp.content), schema)
+        return LLMReply(text=text, input_tokens=tin, output_tokens=u.output_tokens, cost_usd=price, stop_reason=str(comp.stop_reason or ""), request_id=comp.request_id or "")
 
 
 class BedrockLLM:
@@ -171,7 +192,7 @@ class BedrockLLM:
         self.client = boto3.client("bedrock-runtime", **kwargs)
         self.masker = masker
 
-    def complete(self, model: str, system: str, user: str, max_tokens: int) -> LLMReply:
+    def complete(self, model: str, system: str, user: str, max_tokens: int, schema: dict | None = None) -> LLMReply:
         from botocore.exceptions import ClientError
 
         system, user = _mask(self.masker, system, user)
@@ -180,6 +201,7 @@ class BedrockLLM:
             "max_tokens": max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user}],
+            **_tool_args(schema),
         }
         t0 = time.monotonic()
         try:
@@ -188,11 +210,11 @@ class BedrockLLM:
             code = str(e.response.get("Error", {}).get("Code", ""))
             raise LLMError(f"Bedrock の呼び出しに失敗しました: {code}", retryable=code in ("ThrottlingException", "ServiceUnavailableException", "ModelNotReadyException")) from e
         request_id = str((res.get("ResponseMetadata") or {}).get("RequestId") or "")
-        return _reply(model, json.loads(res["body"].read()), request_id, int((time.monotonic() - t0) * 1000))
+        return _reply(model, json.loads(res["body"].read()), request_id, int((time.monotonic() - t0) * 1000), schema)
 
 
-def _reply(model: str, data: dict, request_id: str = "", duration_ms: int = 0) -> LLMReply:
-    text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
+def _reply(model: str, data: dict, request_id: str = "", duration_ms: int = 0, schema: dict | None = None) -> LLMReply:
+    text = _result_text(list(data.get("content", [])), schema)
     u = dc.Usage.from_api(data.get("usage"))
     tin = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
     stop = str(data.get("stop_reason", ""))
