@@ -10,7 +10,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from ..domain import Job, JobStatus
-from ..ports import Conflict, NotFound, QueueMessage
+from ..ports import SPEND_ALL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
 
 OWNER_INDEX = "owner-job-index"  # infra/aws の DynamoDB と同じ名前
 _RETRY = Config(retries={"max_attempts": 5, "mode": "standard"}, connect_timeout=5, read_timeout=30)
@@ -84,7 +84,11 @@ class SqsQueue:
 
 
 class DynamoJobRepository:
-    """表: パーティションキー job_id. 利用者ごとの一覧は GSI（owner, job_id）. job_id は日時で始まるので新しい順に並ぶ. 期限切れは DynamoDB の TTL が消す."""
+    """表: パーティションキー job_id. 利用者ごとの一覧は GSI（owner, job_id）. job_id は日時で始まるので新しい順に並ぶ. 期限切れは DynamoDB の TTL が消す.
+
+    日次の費用も同じ表に置く（job_id = `spend#<日付>#<all か利用者のハッシュ>`、owner を持たないので一覧の GSI には出ない）.
+    足すのは UpdateItem の ADD（複数のワーカーが同時に足しても失われない）. expires_at の TTL で消える.
+    """
 
     def __init__(self, table: str, region: str, endpoint_url: str = ""):
         self.table = table
@@ -144,3 +148,23 @@ class DynamoJobRepository:
 
     def delete_expired(self, now_epoch: int, limit: int = 100) -> int:
         return 0  # DynamoDB の TTL（expires_at）が消す
+
+    @staticmethod
+    def _spend_key(day: str, scope: str) -> dict[str, Any]:
+        return {"job_id": {"S": f"spend#{day}#{scope}"}}
+
+    def add_spend(self, day: str, owner: str, usd: float) -> None:
+        for scope in (SPEND_ALL, spend_scope(owner)):
+            self.ddb.update_item(
+                TableName=self.table,
+                Key=self._spend_key(day, scope),
+                UpdateExpression="ADD usd :u SET expires_at = :e",
+                ExpressionAttributeValues={":u": {"N": repr(float(usd))}, ":e": {"N": str(spend_expires_at(day))}},
+            )
+
+    def spent(self, day: str, owner: str) -> tuple[float, float]:
+        out = []
+        for scope in (SPEND_ALL, spend_scope(owner)):
+            item = self.ddb.get_item(TableName=self.table, Key=self._spend_key(day, scope), ConsistentRead=True).get("Item") or {}
+            out.append(float(item.get("usd", {}).get("N", "0")))
+        return out[0], out[1]

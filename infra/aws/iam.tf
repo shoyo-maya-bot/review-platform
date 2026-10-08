@@ -194,10 +194,12 @@ data "aws_iam_policy_document" "worker_task" {
   statement {
     sid    = "JobsTable"
     effect = "Allow"
-    # 状態の更新は条件付きの PutItem（二重に届いたメッセージを 1 回分しか処理しないため）
+    # 状態の更新は条件付きの PutItem（二重に届いたメッセージを 1 回分しか処理しないため）.
+    # UpdateItem は日次の費用の集計（ADD で足す. 同時に足しても失われない）だけに使う
     actions = [
       "dynamodb:GetItem",
       "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
     ]
     resources = [aws_dynamodb_table.jobs.arn]
   }

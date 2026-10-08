@@ -9,7 +9,7 @@ import pytest
 boto3 = pytest.importorskip("boto3")
 moto = pytest.importorskip("moto")
 
-from contract import blob_contract, queue_contract, repo_contract  # noqa: E402
+from contract import blob_contract, queue_contract, repo_contract, spend_contract  # noqa: E402
 from review_platform.adapters.aws import OWNER_INDEX, DynamoJobRepository, S3BlobStore, SqsQueue  # noqa: E402
 
 pytestmark = pytest.mark.aws
@@ -54,7 +54,9 @@ def test_dynamodb():
             }
         ],
     )
-    repo_contract(DynamoJobRepository("rp-jobs", REGION))
+    repo = DynamoJobRepository("rp-jobs", REGION)
+    repo_contract(repo)
+    spend_contract(repo)
 
 
 def test_bedrock_request_shape(monkeypatch):

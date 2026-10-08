@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from review_platform.domain import Job, JobKind, JobStatus
+from review_platform.domain import Job, JobKind, JobStatus, valid_job_id
 from review_platform.ports import Conflict, NotFound
 
 
@@ -59,3 +59,16 @@ def repo_contract(repo) -> None:
     mine = repo.list_by_owner("alice", 10)
     assert {j.job_id for j in mine} == {a.job_id, b.job_id}
     assert [j.job_id for j in repo.list_by_owner("alice", 1)] == [max(a.job_id, b.job_id)]
+
+
+def spend_contract(repo) -> None:
+    """日次の費用: 全体と利用者ごとに足し上がり、日付・利用者で分かれる. 一覧にジョブとして出ない."""
+    assert repo.spent("2026-10-08", "alice") == (0.0, 0.0)
+    repo.add_spend("2026-10-08", "alice", 0.25)
+    repo.add_spend("2026-10-08", "alice", 0.5)
+    repo.add_spend("2026-10-08", "bob/x#1", 0.125)  # キーに使えない文字を含む利用者名
+    total, mine = repo.spent("2026-10-08", "alice")
+    assert total == pytest.approx(0.875) and mine == pytest.approx(0.75)
+    assert repo.spent("2026-10-08", "bob/x#1")[1] == pytest.approx(0.125)
+    assert repo.spent("2026-10-09", "alice") == (0.0, 0.0)
+    assert all(valid_job_id(j.job_id) for j in repo.list_by_owner("alice", 100))  # 集計の行はジョブの一覧に出ない
