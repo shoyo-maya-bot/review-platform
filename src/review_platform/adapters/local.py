@@ -184,8 +184,7 @@ class SqliteJobRepository(_Sqlite):
         if not done:
             return 0
         with closing(self.connect()) as con:
-            cur = con.execute(f"DELETE FROM jobs WHERE job_id IN ({','.join('?' * len(done))})", done)  # noqa: S608 - ? の数だけを埋める
-            return cur.rowcount
+            return sum(con.execute("DELETE FROM jobs WHERE job_id = ?", (j,)).rowcount for j in done)
 
     def _delete_files(self, job_id: str) -> bool:
         if not valid_job_id(job_id):  # キーに使う前に形を確かめる（root の外を消さない）
