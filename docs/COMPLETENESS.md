@@ -39,7 +39,7 @@
 |---|---|---|
 | AWS に apply して動く | [AWS.md](AWS.md) の手順 1〜9. 予算アラートを先に設定 | 未確認 |
 | Azure に apply して動く | [AZURE.md](AZURE.md) の手順 | 未確認 |
-| 本物の LLM でレビューできる（Anthropic・Bedrock・Foundry） | `.env` を `RP_LLM=anthropic`（または `bedrock`）にして `samples/` を送る. 費用は結果の `cost_usd` | 未確認 |
+| 本物の LLM でレビューできる（Anthropic・Bedrock・Foundry） | `.env` を `RP_LLM=anthropic`（または `bedrock`）にし、`RP_BUDGET_*` の 3 つを 0 より大きくして `samples/` を送る. 費用は結果の `cost_usd` | 未確認 |
 | Cognito / Entra ID の JWT で API と MCP を呼べる | 各ドキュメントのトークンの取り方 → `curl` と VS Code | 未確認 |
 | AWS の NAT なしで Cognito の公開鍵（JWKS）が取れる | ワーカーではなく API のログで JWKS の取得の失敗が無いこと. 取れなければ [SECURITY.md](SECURITY.md) の妥協のとおり | 未確認 |
 | Azure の KEDA がマネージド ID でキューの長さを読み、0 台から増える | ジョブを送り、`az containerapp replica list` で台数を見る | 未確認 |

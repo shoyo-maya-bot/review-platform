@@ -27,6 +27,11 @@ llm_base_url       = "https://<your-value>.services.ai.azure.com/anthropic"
 llm_model_standard = "<your-value>" # Foundry のデプロイ名
 llm_model_deep     = "<your-value>" # 空 "" なら検証しない
 
+# 費用の上限（米ドル）。既定 0 = 有料の LLM を呼ばない。AI レビューを使うときだけ、3 つとも 0 より大きくする。
+budget_per_job_usd         = 0
+budget_daily_usd           = 0
+budget_daily_per_owner_usd = 0
+
 # 通知と予算。
 alert_emails      = ["<your-value>"]
 budget_amount     = 10000 # 請求の通貨（日本の契約なら円）

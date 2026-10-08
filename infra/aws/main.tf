@@ -53,9 +53,11 @@ locals {
       RP_SQS_QUEUE_URL = aws_sqs_queue.jobs.url
       RP_DDB_TABLE     = aws_dynamodb_table.jobs.name
 
-      RP_LLM                = var.llm_provider
-      RP_LLM_MODEL_DEEP     = var.llm_model_deep
-      RP_BUDGET_PER_JOB_USD = tostring(var.budget_per_job_usd)
+      RP_LLM                        = var.llm_provider
+      RP_LLM_MODEL_DEEP             = var.llm_model_deep
+      RP_BUDGET_PER_JOB_USD         = tostring(var.budget_per_job_usd)
+      RP_BUDGET_DAILY_USD           = tostring(var.budget_daily_usd)
+      RP_BUDGET_DAILY_PER_OWNER_USD = tostring(var.budget_daily_per_owner_usd)
 
       RP_NOTIFY = local.notify
 

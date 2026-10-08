@@ -65,7 +65,8 @@ Container Apps 環境は、基盤用のリソースグループ `rg-<prefix>-aca
 | `RP_AZURE_BLOB_URL` / `RP_AZURE_QUEUE_URL` / `RP_AZURE_TABLE_URL` | ストレージアカウントの各エンドポイント（末尾の `/` なし） |
 | `RP_AZURE_CONTAINER` / `RP_AZURE_QUEUE_NAME` / `RP_AZURE_TABLE_NAME` | `review` / `jobs` / `jobs` |
 | `AZURE_CLIENT_ID` | マネージド ID のクライアント ID（Azure SDK の `DefaultAzureCredential` が読む） |
-| `RP_LLM` / `RP_LLM_BASE_URL` / `RP_LLM_MODEL_STANDARD` / `RP_LLM_MODEL_DEEP` / `RP_BUDGET_PER_JOB_USD` | 変数 `llm_mode` / `llm_base_url` / `llm_model_standard` / `llm_model_deep` / `budget_per_job_usd` から |
+| `RP_LLM` / `RP_LLM_BASE_URL` / `RP_LLM_MODEL_STANDARD` / `RP_LLM_MODEL_DEEP` | 変数 `llm_mode` / `llm_base_url` / `llm_model_standard` / `llm_model_deep` から |
+| `RP_BUDGET_PER_JOB_USD` / `RP_BUDGET_DAILY_USD` / `RP_BUDGET_DAILY_PER_OWNER_USD` | 変数 `budget_per_job_usd` / `budget_daily_usd` / `budget_daily_per_owner_usd` から。既定はすべて 0 = 有料の LLM を呼ばない |
 | `RP_NOTIFY` | 変数 `notify` から |
 | `RP_LOG_LEVEL` / `RP_MAX_UPLOAD_MB` / `RP_JOB_TTL_DAYS` | 変数 `log_level` / `max_upload_mb` / `job_ttl_days` から |
 | `RP_PUBLIC_BASE_URL` | `public_base_url`。空なら api の URL（`https://<api の FQDN>`） |
@@ -105,9 +106,9 @@ Key Vault の PE をやめる（`key_vault_private_endpoint_enabled = false`）�
 | api | 0.5 vCPU・1 GiB。受付と結果の取得だけ | ほぼ $0 |
 | Storage | 1 ジョブ 5 MB（原本と結果）。操作は数十回 | $0.01 未満 |
 | Log Analytics | 1 ジョブ 1 MB のログ | 約 $0.3 |
-| **LLM** | 1 ジョブの入力・出力のトークン数 × 単価。単価は Foundry（または使う窓口）の価格表で確認 | **ここがほとんど。上限は `RP_BUDGET_PER_JOB_USD`（既定 $1）× 100 = $100** |
+| **LLM** | 1 ジョブの入力・出力のトークン数 × 単価。単価は Foundry（または使う窓口）の価格表で確認 | **既定は $0（上限 `RP_BUDGET_*` が既定の 0 のままなら LLM を呼ばない）。上限を設定したときはここがほとんどで、1 日あたり最大 `budget_daily_usd`** |
 
-LLM 以外は 100 ジョブで $1 前後です。費用の管理は、アプリの 1 ジョブ上限（`budget_per_job_usd`）と、Azure の予算アラート（`budget_amount`）の 2 段で行います。
+LLM 以外は 100 ジョブで $1 前後です。費用の管理は、アプリの上限（`budget_per_job_usd`・`budget_daily_usd`・`budget_daily_per_owner_usd`。既定はすべて 0 で、0 のままなら有料の LLM を呼ばない）と、Azure の予算アラート（`budget_amount`）の 2 段で行います。AI レビューを使うときは、3 つの上限をすべて 0 より大きい値に明示的に設定します。
 
 ## 前提
 
