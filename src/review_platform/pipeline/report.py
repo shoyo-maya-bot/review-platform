@@ -28,7 +28,16 @@ def _call(c) -> dict[str, Any]:
     return {k: getattr(c, k) for k in ("step", "model", "input_tokens", "output_tokens", "cost_usd")}
 
 
-def build(job: Job, findings: list, calls: list, notes: list[str], warnings: list[str] | None = None, routing: dict | None = None) -> dict[str, Any]:
+def build(
+    job: Job,
+    findings: list,
+    calls: list,
+    notes: list[str],
+    warnings: list[str] | None = None,
+    routing: dict | None = None,
+    partial: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """結果. partial は一部だけをレビューしたとき {"reviewed_chars", "total_chars"}（summary の partial が true になる）."""
     shown = [f for f in findings if f.status != "rejected"]
     rejected = [f for f in findings if f.status == "rejected"]
     return {
@@ -37,6 +46,7 @@ def build(job: Job, findings: list, calls: list, notes: list[str], warnings: lis
         "routing": routing or None,
         "conversion_warnings": list(warnings or []),
         "notes": list(notes),
+        "partial": dict(partial) if partial else None,
         "findings": [_f(f) for f in shown],
         "rejected": [_f(f) for f in rejected],
         "calls": [_call(c) for c in calls],
@@ -54,17 +64,33 @@ def summary(report: dict[str, Any]) -> dict[str, Any]:
         "rejected": len(report["rejected"]),
         "open_must": sev["MUST"],
         "conversion_warnings": len(report["conversion_warnings"]),
+        # 一部だけをレビューした（長すぎる文書の残りは見ていない）. submit --wait はこのとき終了コード 7（MUST ありなら 1）
+        "partial": bool(report.get("partial")),
     }
 
 
 _MENTION = re.compile(r"[@＠](channel|here|everyone|all)\b", re.I)
+# Markdown のリンク・画像（インライン `[文字](URL)`・`![代替](URL)` と参照 `[文字][名前]`）. 文字だけを残す
+_INLINE_LINK = re.compile(r"!?\[([^\[\]]*)\]\([^()]*(?:\([^()]*\)[^()]*)*\)")
+_REF_LINK = re.compile(r"!?\[([^\[\]]*)\]\[[^\[\]]*\]")
+
+
+def strip_links(s: str) -> str:
+    """Markdown のリンク・画像を、その文字（画像は代替テキスト）だけにする. 外の URL を開かせない・読み込ませない."""
+    prev = None
+    while prev != s:  # `[[a](x)](y)` のような入れ子も外す
+        prev = s
+        s = _INLINE_LINK.sub(lambda m: m.group(1), s)
+        s = _REF_LINK.sub(lambda m: m.group(1), s)
+    return s
 
 
 def clean(s: str, limit: int = 2000) -> str:
-    """表のセルに入れる文字列を無害化する（HTML・画像・メンション・表の区切り・改行）."""
-    s = (s or "")[:limit]
+    """表のセルに入れる文字列を無害化する（HTML・リンク・画像・メンション・表の区切り・改行）."""
+    s = strip_links((s or "")[:limit])
     s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    s = s.replace("![", "!\\[")
+    # 残った角かっこも文字として出す（別の場所の参照定義 `[名前]: URL` とつながってリンクにならないように）
+    s = s.replace("[", "\\[").replace("]", "\\]")
     s = _MENTION.sub(lambda m: "@\u200b" + m.group(1), s)
     s = s.replace("|", "\\|").replace("\r", " ").replace("\n", " ")
     return s
@@ -77,6 +103,8 @@ def markdown(report: dict[str, Any]) -> str:
     s = summary(report)
     lines.append("- 件数: " + " / ".join(f"{k} {v}" for k, v in s["severity"].items()) + f"（検証で却下 {s['rejected']}）")
     lines.append(f"- 費用: ${report['cost_usd']:.3f}")
+    if p := report.get("partial"):
+        lines.append(f"- **範囲: 一部だけ**（全 {p['total_chars']:,} 文字のうち先頭の {p['reviewed_chars']:,} 文字. 残りはレビューしていません）")
     lines.append("")
     lines.append("> AI の指摘は下書きです。採否は人が決めてください。")
     lines.append("")

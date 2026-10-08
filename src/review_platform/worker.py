@@ -323,13 +323,13 @@ class Worker:
 
             with tempfile.TemporaryDirectory(prefix="rp-") as tmp:
                 conv = to_markdown(job.filename, data, Path(tmp), self.runner)
-            findings, calls, notes = [], [], []
+            findings, calls, notes, partial = [], [], [], None
             if llm.name == "none":
                 notes.append("RP_LLM=none のため、変換と変換ロスの確認だけを行いました")
             else:
                 out = DocumentReviewer(llm, self.s.llm_model_standard, self.s.llm_model_deep, remaining_budget).review(job.filename, conv.markdown)
-                findings, calls, notes = out.findings, out.calls, out.notes
-            rep = report.build(job, findings, calls, notes, warnings=conv.warnings)
+                findings, calls, notes, partial = out.findings, out.calls, out.notes, out.partial
+            rep = report.build(job, findings, calls, notes, warnings=conv.warnings, partial=partial)
             self.blobs.put(f"results/{job.job_id}/document.md", conv.markdown.encode("utf-8"), "text/markdown; charset=utf-8")
         spent = getattr(llm, "spent", None)
         if spent is not None and spent > rep["cost_usd"] + 1e-6:

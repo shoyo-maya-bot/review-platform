@@ -112,5 +112,5 @@ def test_readme_documents_submit_exit_codes():
 
     readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
     section = readme.split("### submit の終了コード", 1)[1].split("\n#", 1)[0]
-    for code in (cli.EXIT_OK, cli.EXIT_MUST, cli.EXIT_REQUEST, cli.EXIT_SERVER, cli.EXIT_TIMEOUT, cli.EXIT_JOB_FAILED):
+    for code in (cli.EXIT_OK, cli.EXIT_MUST, cli.EXIT_REQUEST, cli.EXIT_SERVER, cli.EXIT_TIMEOUT, cli.EXIT_JOB_FAILED, cli.EXIT_UNKNOWN, cli.EXIT_PARTIAL):
         assert f"| `{code}` |" in section, code

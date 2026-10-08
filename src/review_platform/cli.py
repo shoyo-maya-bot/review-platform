@@ -7,7 +7,9 @@ review-platform check-config --role api|worker
 review-platform submit FILE --url URL [--token T] [--wait]   ファイルを送って結果を表示
 
 submit の終了コード: 0 成功（--wait なら未解決の MUST なし）/ 1 未解決の MUST あり / 2 送れなかった（引数・ファイル・認証・入力の誤り）/
-3 送れなかった・状態を読めなかった（通信・サーバーの誤り）/ 4 時間切れ（--timeout）/ 5 ジョブが失敗した
+3 送れなかった（通信・サーバーの誤り）/ 4 時間切れ（--timeout）/ 5 ジョブが失敗した /
+6 受け付けた後に状態・結果を読めなかった（再試行しても通信・5xx・429. ジョブは動いている. 送り直さず job_id で読む）/
+7 成功したが文書の一部だけをレビューした（長すぎる文書. 未解決の MUST があれば 1）
 """
 
 from __future__ import annotations
@@ -96,6 +98,12 @@ EXIT_REQUEST = 2  # 送れなかった（引数・ファイル・認証 401/403�
 EXIT_SERVER = 3  # 送れなかった・状態を読めなかった（接続できない・時間切れの通信・5xx・429. 待ってからやり直すと通ることがある）
 EXIT_TIMEOUT = 4  # --wait: --timeout の秒数までに終わらなかった（ジョブは動き続けている. job_id で後から読める）
 EXIT_JOB_FAILED = 5  # --wait: ジョブが failed で終わった（理由を表示する）
+EXIT_UNKNOWN = 6  # --wait: 受け付けた後、状態か結果を読めなかった（再試行しても通信・5xx・429）. ジョブは動いている. 再送すると二重のジョブ・費用になる
+EXIT_PARTIAL = 7  # --wait: 成功したが文書の一部だけをレビューした（未解決の MUST があれば 1 を優先）
+
+POLL_INTERVAL = 3.0  # 状態を聞く間隔（秒）
+POLL_RETRIES = 5  # 受け付けた後の通信の一時的な失敗（接続・5xx・429）を続けて何回まで再試行するか
+POLL_BACKOFF_MAX = 30.0  # 再試行の待ち時間の上限（秒. 3, 6, 12, 24, 30 と延ばす）
 
 
 class _SubmitError(Exception):
@@ -169,8 +177,8 @@ def _submit(args) -> int:
             return EXIT_OK
         deadline = time.monotonic() + args.timeout
         while job.get("status") not in ("succeeded", "failed") and time.monotonic() < deadline:
-            time.sleep(3)
-            job = _json(_request(c, "GET", f"/v1/jobs/{job_id}", "状態を読めませんでした"), "状態を読めませんでした")
+            time.sleep(POLL_INTERVAL)
+            job = _poll(c, "GET", f"/v1/jobs/{job_id}", "状態を読めませんでした", job_id, deadline, as_json=True)
         status = job.get("status", "")
         if status == "failed":
             print(f"error: ジョブが失敗しました（{job_id}）: {job.get('error', '')}", file=sys.stderr)
@@ -178,9 +186,41 @@ def _submit(args) -> int:
         if status != "succeeded":
             print(f"error: {args.timeout} 秒で終わりませんでした（{job_id} は {status}. 後から GET /v1/jobs/{job_id} で読めます）", file=sys.stderr)
             return EXIT_TIMEOUT
-        rep = _request(c, "GET", f"/v1/jobs/{job_id}/report", "結果を読めませんでした", params={"format": args.format})
+        rep = _poll(c, "GET", f"/v1/jobs/{job_id}/report", "結果を読めませんでした", job_id, None, params={"format": args.format})
         print(rep.text)
-        return EXIT_MUST if (job.get("summary") or {}).get("open_must") else EXIT_OK
+        summary = job.get("summary") or {}
+        if summary.get("open_must"):
+            return EXIT_MUST
+        if summary.get("partial"):
+            print(f"warning: 文書が長いため、一部だけをレビューしました（{job_id}. 結果の「範囲」を見てください）", file=sys.stderr)
+            return EXIT_PARTIAL
+        return EXIT_OK
+
+
+def _poll(c, method: str, url: str, what: str, job_id: str, deadline: float | None, as_json: bool = False, **kw):
+    """受け付けた後の問い合わせ. 一時的な失敗（接続・時間切れの通信・5xx・429・JSON でない応答）は待って再試行する.
+
+    それでも読めなければ EXIT_UNKNOWN（ジョブは受け付け済みで動いている. 再送すると二重のジョブ・二重の費用になる）.
+    直さない限り同じ失敗（401・403・404 など）は、そのまま EXIT_REQUEST.
+    """
+    wait = POLL_INTERVAL
+    for attempt in range(POLL_RETRIES + 1):
+        try:
+            r = _request(c, method, url, what, **kw)
+            return _json(r, what) if as_json else r
+        except _SubmitError as e:
+            if e.code != EXIT_SERVER:
+                raise _SubmitError(e.code, f"{e}（job_id: {job_id}）") from None
+            last = e
+        if attempt == POLL_RETRIES or (deadline is not None and time.monotonic() + wait > deadline):
+            break
+        print(f"warning: {last}. {wait:.0f} 秒後に再試行します（{attempt + 1}/{POLL_RETRIES}）", file=sys.stderr)
+        time.sleep(wait)
+        wait = min(wait * 2, POLL_BACKOFF_MAX)
+    raise _SubmitError(
+        EXIT_UNKNOWN,
+        f"{last}. ジョブ {job_id} は受け付け済みです. 送り直さず、後から GET /v1/jobs/{job_id} で状態を読んでください",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
