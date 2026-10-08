@@ -6,15 +6,19 @@ API とワーカーが同じ RP_DATA_DIR を共有する前提. 本番の負荷�
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
+import shutil
 import sqlite3
 import time
 from contextlib import closing
 from pathlib import Path
 
-from ..domain import Job, JobStatus
-from ..ports import Conflict, NotFound, QueueMessage
+from ..domain import Job, JobStatus, valid_job_id
+from ..ports import SPEND_ALL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
+
+log = logging.getLogger(__name__)
 
 
 def _check_key(key: str) -> None:
@@ -124,14 +128,19 @@ class SqliteQueue(_Sqlite):
 
 
 class SqliteJobRepository(_Sqlite):
+    """ジョブ表. 期限切れのジョブは、行と一緒に原本・結果のファイル（FsBlobStore の uploads/<job_id>/・results/<job_id>/）も消す
+    （ローカルには S3・Blob のライフサイクルのような自動の削除が無いため）. FsBlobStore と同じ root を渡す前提."""
+
     def __init__(self, root: Path):
         super().__init__(root / "jobs.sqlite3")
+        self.blob_root = root / "blobs"  # FsBlobStore(root) と同じ場所
         with closing(self.connect()) as con:
             con.execute(
                 "CREATE TABLE IF NOT EXISTS jobs (job_id TEXT PRIMARY KEY, owner TEXT NOT NULL, status TEXT NOT NULL,"
                 " created_at TEXT NOT NULL, expires_at INTEGER NOT NULL, data TEXT NOT NULL)"
             )
             con.execute("CREATE INDEX IF NOT EXISTS jobs_owner ON jobs (owner, job_id)")
+            con.execute("CREATE TABLE IF NOT EXISTS spend (day TEXT NOT NULL, scope TEXT NOT NULL, usd REAL NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY (day, scope))")
 
     def create(self, job: Job) -> None:
         with closing(self.connect()) as con:
@@ -167,9 +176,43 @@ class SqliteJobRepository(_Sqlite):
         return [Job.from_dict(json.loads(r[0])) for r in rows]
 
     def delete_expired(self, now_epoch: int, limit: int = 100) -> int:
+        """期限切れのジョブを消す. 先にファイル（原本・結果）を消し、消せたものだけ行を消す（途中で落ちても次の回にやり直せる）."""
         with closing(self.connect()) as con:
-            cur = con.execute(
-                "DELETE FROM jobs WHERE job_id IN (SELECT job_id FROM jobs WHERE expires_at > 0 AND expires_at < ? LIMIT ?)",
-                (now_epoch, limit),
-            )
+            ids = [r[0] for r in con.execute("SELECT job_id FROM jobs WHERE expires_at > 0 AND expires_at < ? LIMIT ?", (now_epoch, limit))]
+            con.execute("DELETE FROM spend WHERE expires_at < ?", (now_epoch,))
+        done = [j for j in ids if self._delete_files(j)]
+        if not done:
+            return 0
+        with closing(self.connect()) as con:
+            cur = con.execute(f"DELETE FROM jobs WHERE job_id IN ({','.join('?' * len(done))})", done)  # noqa: S608 - ? の数だけを埋める
             return cur.rowcount
+
+    def _delete_files(self, job_id: str) -> bool:
+        if not valid_job_id(job_id):  # キーに使う前に形を確かめる（root の外を消さない）
+            return True
+        for prefix in ("uploads", "results"):
+            d = self.blob_root / prefix / job_id
+            try:
+                if d.is_symlink():
+                    d.unlink()
+                elif d.exists():
+                    shutil.rmtree(d)
+            except OSError:
+                log.warning("expired job files not deleted; will retry", extra={"job_id": job_id})
+                return False
+        return True
+
+    # ---- 日次の費用
+    def add_spend(self, day: str, owner: str, usd: float) -> None:
+        exp = spend_expires_at(day)
+        with closing(self.connect()) as con:
+            for scope in (SPEND_ALL, spend_scope(owner)):
+                con.execute(
+                    "INSERT INTO spend (day, scope, usd, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT (day, scope) DO UPDATE SET usd = usd + excluded.usd",
+                    (day, scope, float(usd), exp),
+                )
+
+    def spent(self, day: str, owner: str) -> tuple[float, float]:
+        with closing(self.connect()) as con:
+            rows = dict(con.execute("SELECT scope, usd FROM spend WHERE day = ? AND scope IN (?, ?)", (day, SPEND_ALL, spend_scope(owner))).fetchall())
+        return float(rows.get(SPEND_ALL, 0.0)), float(rows.get(spend_scope(owner), 0.0))
