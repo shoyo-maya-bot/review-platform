@@ -48,6 +48,8 @@ class ReviewOutcome:
     findings: list[Finding] = field(default_factory=list)
     calls: list[Call] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # 文書の一部だけをレビューしたとき {"reviewed_chars": …, "total_chars": …}. 全体をレビューしたら None
+    partial: dict[str, int] | None = None
 
     @property
     def cost_usd(self) -> float:
@@ -158,7 +160,9 @@ class DocumentReviewer:
     def review(self, name: str, markdown: str) -> ReviewOutcome:
         out = ReviewOutcome()
         if len(markdown) > MAX_DOC_CHARS:
-            out.notes.append(f"文書が長いため、先頭の約 {MAX_DOC_CHARS:,} 文字だけをレビューしました（残り {len(markdown) - MAX_DOC_CHARS:,} 文字）")
+            rest = len(markdown) - MAX_DOC_CHARS
+            out.notes.append(f"一部だけ: 文書が長いため、先頭の約 {MAX_DOC_CHARS:,} 文字だけをレビューしました（残り {rest:,} 文字はレビューしていません）")
+            out.partial = {"reviewed_chars": MAX_DOC_CHARS, "total_chars": len(markdown)}
             markdown = markdown[:MAX_DOC_CHARS]
         system = _prompt("design-review.md", MAX_FINDINGS)
         user = wrap_document(name, markdown)

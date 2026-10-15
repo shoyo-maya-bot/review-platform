@@ -13,7 +13,7 @@ import pytest
 
 from conftest import TOKEN
 from review_platform import cli, logs
-from review_platform.adapters.llm import AnthropicLLM, LLMError, price_for
+from review_platform.adapters.llm import UNKNOWN_PRICE, AnthropicLLM, LLMError, price_for
 from review_platform.adapters.notify import SlackNotifier
 from review_platform.domain import Job, JobKind, JobStatus
 
@@ -194,18 +194,18 @@ def test_anthropic_reuses_one_client_per_model():
 
 
 def test_price_lookup():
-    assert price_for("apac.anthropic.claude-haiku-4-5") == (1.0, 5.0) and price_for("unknown-model") == (4.0, 20.0)
+    assert price_for("apac.anthropic.claude-haiku-4-5") == (1.0, 5.0) and price_for("unknown-model") == UNKNOWN_PRICE
     # 共通の料金表（devtools_common.llm.PRICES）で引く. Bedrock の ID・推論プロファイルの ARN・日付付きの ID も同じ単価
     assert price_for("anthropic.claude-sonnet-4-5-20250929-v1:0") == (3.0, 15.0)
     assert price_for("arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/apac.anthropic.claude-sonnet-4-5-20250929-v1:0") == (3.0, 15.0)
     assert price_for("claude-haiku-4-5-20251001") == (1.0, 5.0) and price_for("claude-opus-4-1") == (15.0, 75.0)
-    assert price_for("claude-opus-4-9") == (4.0, 20.0)  # 表に無い新しい版は高い側で見積もる（古い版の単価に当てない）
+    assert price_for("claude-opus-4-9") == UNKNOWN_PRICE  # 表に無い新しい版は料金表の最大の単価で見積もる（古い版の単価に当てない）
 
 
 def test_cost_for_unknown_model_counts_cache_as_input():
     from review_platform.adapters.llm import cost
 
-    assert cost("unknown-model", 1_000_000, 0, 500_000, 500_000) == pytest.approx(8.0)
+    assert cost("unknown-model", 1_000_000, 0, 500_000, 500_000) == pytest.approx(2 * UNKNOWN_PRICE[0])
 
 
 def test_slack_notify_sanitizes_and_never_raises():
