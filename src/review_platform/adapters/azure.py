@@ -19,7 +19,7 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.storage.queue import QueueClient
 
 from ..domain import Job, JobStatus
-from ..ports import RATE_TTL_SECONDS, SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, rate_key, spend_expires_at, spend_scope
+from ..ports import RATE_TTL_SECONDS, SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
 
 PARTITION = "job"
 SPEND_PARTITION = "spend"
@@ -165,7 +165,7 @@ class AzureJobRepository:
 
     def count_request(self, principal: str, window: int, limit: int, attempts: int = 10) -> bool:
         """件数の行（PartitionKey=rate）に、上限未満のときだけ 1 足す（ETag の楽観的な同時実行制御. 同時に更新されたら読み直す）."""
-        row = rate_key(principal, window)
+        row = f"{window}|{spend_scope(principal)}"  # RowKey に # は使えない（費用の行と同じく | で区切る）
         for _ in range(attempts):
             try:
                 cur = self.t.get_entity(RATE_PARTITION, row)
