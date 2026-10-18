@@ -40,7 +40,11 @@ log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
 VISIBILITY_SECONDS = 900
 HEARTBEAT_SECONDS = 300
-LEASE_SECONDS = VISIBILITY_SECONDS  # 心拍が止まってからこの秒数が過ぎたら、別のワーカーが引き継げる
+# 心拍が止まってからこの秒数が過ぎたら、別のワーカーが引き継げる. メッセージの見えない時間より短くする:
+# 同じ長さだと、ワーカーが落ちた後に再配信されたメッセージがまだ貸し出し中のジョブに当たって見送られ、受信回数を 1 回むだにする
+# （MAX_ATTEMPTS が実質 1 回減る）. 心拍は先にジョブの期限を延ばしてからメッセージを延ばすので、期限は必ず再配信より前に切れる
+LEASE_MARGIN_SECONDS = 60
+LEASE_SECONDS = VISIBILITY_SECONDS - LEASE_MARGIN_SECONDS
 CLEANUP_INTERVAL_SECONDS = 3600
 
 
@@ -126,12 +130,20 @@ class _Heartbeat:
 
     def _run(self) -> None:
         while not self.stop.wait(HEARTBEAT_SECONDS):
-            try:
-                self.queue.extend(self.msg, VISIBILITY_SECONDS)
-                self.job.updated_at = iso(now())
-                self.repo.transition(self.job, expected=JobStatus.RUNNING, expected_attempts=self.job.attempts)
-            except Exception:  # noqa: BLE001 - 延長の失敗は致命的ではない（最悪、別のワーカーがやり直し、終わりの更新は条件で弾かれる）
-                log.warning("heartbeat failed", extra={"job_id": self.msg.job_id})
+            # 先にジョブの貸し出し期限を延ばし、その後でメッセージを延ばす（期限がメッセージの再配信より後まで残らないように）.
+            # 片方が失敗しても、もう片方は行う（延長の失敗は致命的ではない. 最悪、別のワーカーがやり直し、終わりの更新は条件で弾かれる）
+            for what, extend in (("lease", self._extend_lease), ("message", self._extend_message)):
+                try:
+                    extend()
+                except Exception:  # noqa: BLE001
+                    log.warning("heartbeat failed", extra={"job_id": self.msg.job_id, "target": what})
+
+    def _extend_lease(self) -> None:
+        self.job.updated_at = iso(now())
+        self.repo.transition(self.job, expected=JobStatus.RUNNING, expected_attempts=self.job.attempts)
+
+    def _extend_message(self) -> None:
+        self.queue.extend(self.msg, VISIBILITY_SECONDS)
 
     def __enter__(self):
         self.t.start()
