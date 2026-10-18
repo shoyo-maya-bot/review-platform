@@ -74,6 +74,8 @@ class Settings:
     job_ttl_days: int = 30
     public_base_url: str = ""
     rate_limit_per_minute: int = 30
+    # 件数制限を台ごとのメモリではなく、ジョブ表（DynamoDB・Table Storage・SQLite）で全台共有して数える（既定は台ごと）
+    rate_limit_shared: bool = False
 
     auth: str = "token"
     api_token_hashes: tuple[str, ...] = ()
@@ -130,6 +132,7 @@ class Settings:
             job_ttl_days=_int("RP_JOB_TTL_DAYS", 30, 1, 3650),
             public_base_url=_env("RP_PUBLIC_BASE_URL").rstrip("/"),
             rate_limit_per_minute=_int("RP_RATE_LIMIT_PER_MINUTE", 30, 1, 10000),
+            rate_limit_shared=_bool("RP_RATE_LIMIT_SHARED", False),
             auth=_choice("RP_AUTH", "token", ("none", "token", "jwt")),
             api_token_hashes=tuple(h.lower() for h in _csv("RP_API_TOKENS_SHA256")),
             jwt_issuer=_env("RP_JWT_ISSUER").rstrip("/"),

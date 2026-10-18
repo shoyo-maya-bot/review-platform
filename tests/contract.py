@@ -116,3 +116,34 @@ def reserve_race_contract(repo, workers: int = 8) -> None:
     assert len(got) == workers
     assert got.count(None) == 3
     assert repo.spent(day, "user0")[0] == pytest.approx(0.9)
+
+
+def rate_contract(repo) -> None:
+    """API の件数制限（RP_RATE_LIMIT_SHARED）: 区切り・利用者ごとに上限まで数え、上限に達したら足さずに False. 一覧にジョブとして出ない."""
+    w = 1_760_000_040
+    assert [repo.count_request("alice", w, 2) for _ in range(3)] == [True, True, False]
+    assert repo.count_request("bob/x#1", w, 2) is True  # 利用者ごと（キーに使えない文字も可）
+    assert repo.count_request("alice", w + 60, 2) is True  # 次の区切りは数え直す
+    assert all(valid_job_id(j.job_id) for j in repo.list_by_owner("alice", 100))
+
+
+def rate_race_contract(repo, workers: int = 8) -> None:
+    """複数の台が同時に数えても、上限を超えて通さない."""
+    import threading
+
+    start = threading.Barrier(workers)
+    got: list[bool] = []
+    lock = threading.Lock()
+
+    def one() -> None:
+        start.wait()
+        r = repo.count_request("carol", 1_760_000_100, 3)
+        with lock:
+            got.append(r)
+
+    ts = [threading.Thread(target=one) for _ in range(workers)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(timeout=60)
+    assert got.count(True) == 3 and len(got) == workers

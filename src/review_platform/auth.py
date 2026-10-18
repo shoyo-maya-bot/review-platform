@@ -12,15 +12,19 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import threading
 import time
 from collections import OrderedDict, deque
+from collections.abc import Callable
 
 import jwt
 from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .config import Settings
+
+log = logging.getLogger(__name__)
 
 PUBLIC_PATHS = ("/healthz",)
 MAX_TRACKED_PRINCIPALS = 10_000  # 件数制限のために覚えておく利用者の数の上限（超えたら最も長く使われていない利用者から忘れる）
@@ -120,11 +124,21 @@ async def _json(send: Send, status: int, body: dict, headers: list[tuple[bytes, 
 
 
 class AuthMiddleware:
-    def __init__(self, app: ASGIApp, verifier, rate_limit_per_minute: int = 30, max_tracked: int = MAX_TRACKED_PRINCIPALS):
+    def __init__(
+        self,
+        app: ASGIApp,
+        verifier,
+        rate_limit_per_minute: int = 30,
+        max_tracked: int = MAX_TRACKED_PRINCIPALS,
+        shared_counter: Callable[[str, int, int], bool] | None = None,
+    ):
+        """shared_counter（JobRepository.count_request）を渡すと、件数を全台で共有して 1 分ごとの区切りで数える
+        （RP_RATE_LIMIT_SHARED）. 共有の保存先が失敗したときは、その回だけ台ごとのメモリで数える（API を止めない）."""
         self.app = app
         self.verifier = verifier
         self.limit = rate_limit_per_minute
         self.max_tracked = max_tracked
+        self.shared_counter = shared_counter
         # 利用者ごとの POST の時刻. 最近使った順（OrderedDict の末尾が最新）. 古いものから消す（_evict）
         self.hits: OrderedDict[str, deque[float]] = OrderedDict()
         self._lock = threading.Lock()
@@ -143,6 +157,16 @@ class AuthMiddleware:
             self.hits.move_to_end(principal)  # 最近使った順に並べる（古いものから消すため）
             self._evict(now)
             return limited
+
+    async def _limited(self, principal: str) -> bool:
+        if self.shared_counter is None:
+            return self._rate_limited(principal)
+        window = int(time.time()) // 60 * 60
+        try:
+            return not await run_in_threadpool(self.shared_counter, principal, window, self.limit)
+        except Exception:  # noqa: BLE001 - 保存先の失敗で API を止めない. この回は台ごとに数える
+            log.warning("shared rate limit unavailable; counting in this process")
+            return self._rate_limited(principal)
 
     def _evict(self, now: float) -> None:
         """利用者ごとの記録が増え続けないよう、古いものから消す. 最後の POST から 60 秒過ぎた利用者は消す（もう数えない）.
@@ -171,7 +195,7 @@ class AuthMiddleware:
             except AuthError:
                 await _json(send, 401, {"error": "unauthorized", "message": "トークンが無効です"}, [(b"www-authenticate", b'Bearer error="invalid_token"')])
                 return
-        if scope["method"] == "POST" and self._rate_limited(principal):
+        if scope["method"] == "POST" and await self._limited(principal):
             await _json(send, 429, {"error": "rate_limited", "message": "しばらく待ってからやり直してください"}, [(b"retry-after", b"60")])
             return
         scope.setdefault("state", {})["principal"] = principal

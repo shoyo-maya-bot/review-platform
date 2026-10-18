@@ -198,7 +198,12 @@ def create_app(settings: Settings, services: Services, verifier=None, mcp_enable
 
     middleware = [
         Middleware(SecurityHeaders),
-        Middleware(AuthMiddleware, verifier=verifier if verifier is not None else build_verifier(s), rate_limit_per_minute=s.rate_limit_per_minute),
+        Middleware(
+            AuthMiddleware,
+            verifier=verifier if verifier is not None else build_verifier(s),
+            rate_limit_per_minute=s.rate_limit_per_minute,
+            shared_counter=services.repo.count_request if s.rate_limit_shared else None,
+        ),
         Middleware(BodyLimit, limit=limit),  # 認証のあと（認証なしの大きな本文は読まない）
     ]
     return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)

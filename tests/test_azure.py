@@ -60,7 +60,7 @@ def test_queue_and_poison(created):
 
 
 def test_table(created):
-    from contract import repo_contract, reserve_contract, reserve_race_contract, spend_contract
+    from contract import rate_contract, rate_race_contract, repo_contract, reserve_contract, reserve_race_contract, spend_contract
     from review_platform.adapters.azure import AzureJobRepository
     from review_platform.domain import Job, JobKind
 
@@ -68,6 +68,8 @@ def test_table(created):
     repo_contract(repo)
     spend_contract(repo)
     reserve_contract(repo)
+    rate_contract(repo)
+    rate_race_contract(repo)
     reserve_race_contract(repo)
     old = Job.create("x", JobKind.DOCUMENT, "o.md", 1)
     old.expires_at = 1
