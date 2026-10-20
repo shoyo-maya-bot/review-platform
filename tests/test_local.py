@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from contract import blob_contract, queue_contract, repo_contract, reserve_contract, reserve_race_contract, spend_contract
+from contract import blob_contract, queue_contract, rate_contract, rate_race_contract, repo_contract, reserve_contract, reserve_race_contract, spend_contract
 from review_platform.adapters.local import FsBlobStore, SqliteJobRepository, SqliteQueue
 from review_platform.domain import Job, JobKind
 
@@ -30,6 +30,8 @@ def test_local_repo(tmp_path):
     spend_contract(repo)
     reserve_contract(repo)
     reserve_race_contract(repo)
+    rate_contract(repo)
+    rate_race_contract(repo)
     old = Job.create("x", JobKind.DOCUMENT, "o.md", 1)
     old.expires_at = 1
     repo.create(old)

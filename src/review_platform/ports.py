@@ -50,6 +50,9 @@ class JobRepository(Protocol):
     # 超えるなら何も足さずに、超えた範囲（SPEND_TOTAL か SPEND_OWNER）を返す. 複数のワーカーが同時に予約しても上限を超えない
     # （条件付き更新）. 呼び出しの後は add_spend（実額 − 予約額. 負もありうる）で精算する
     def reserve_spend(self, day: str, owner: str, usd: float, limit_total: float, limit_owner: float) -> str | None: ...
+    # API の件数制限を複数の台で共有するとき（RP_RATE_LIMIT_SHARED）. window（1 分ごとの区切りの UNIX 秒）の principal の件数が
+    # limit 未満なら 1 足して True、limit に達していれば足さずに False（条件付き更新. 複数の台が同時に数えても超えない）
+    def count_request(self, principal: str, window: int, limit: int) -> bool: ...
 
 
 SPEND_ALL = "all"  # 全体の集計のキー
@@ -62,6 +65,15 @@ def spend_scope(owner: str) -> str:
     import hashlib
 
     return "u-" + hashlib.sha256(owner.encode("utf-8")).hexdigest()[:32]
+
+
+RATE_WINDOW_SECONDS = 60  # 件数制限の区切り
+RATE_TTL_SECONDS = 300  # 件数の記録を残す秒数（TTL・期限切れの削除に使う）
+
+
+def rate_key(principal: str, window: int) -> str:
+    """件数制限の記録のキー（利用者はハッシュにする. 費用の集計と同じ）."""
+    return f"{window}#{spend_scope(principal)}"
 
 
 def spend_expires_at(day: str) -> int:

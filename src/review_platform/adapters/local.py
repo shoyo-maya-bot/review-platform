@@ -16,7 +16,7 @@ from contextlib import closing
 from pathlib import Path
 
 from ..domain import Job, JobStatus, valid_job_id
-from ..ports import SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
+from ..ports import RATE_TTL_SECONDS, SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, rate_key, spend_expires_at, spend_scope
 
 log = logging.getLogger(__name__)
 
@@ -141,6 +141,7 @@ class SqliteJobRepository(_Sqlite):
             )
             con.execute("CREATE INDEX IF NOT EXISTS jobs_owner ON jobs (owner, job_id)")
             con.execute("CREATE TABLE IF NOT EXISTS spend (day TEXT NOT NULL, scope TEXT NOT NULL, usd REAL NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY (day, scope))")
+            con.execute("CREATE TABLE IF NOT EXISTS rate (key TEXT PRIMARY KEY, n INTEGER NOT NULL, expires_at INTEGER NOT NULL)")
 
     def create(self, job: Job) -> None:
         with closing(self.connect()) as con:
@@ -180,6 +181,7 @@ class SqliteJobRepository(_Sqlite):
         with closing(self.connect()) as con:
             ids = [r[0] for r in con.execute("SELECT job_id FROM jobs WHERE expires_at > 0 AND expires_at < ? LIMIT ?", (now_epoch, limit))]
             con.execute("DELETE FROM spend WHERE expires_at < ?", (now_epoch,))
+            con.execute("DELETE FROM rate WHERE expires_at < ?", (now_epoch,))
         done = [j for j in ids if self._delete_files(j)]
         if not done:
             return 0
@@ -233,6 +235,27 @@ class SqliteJobRepository(_Sqlite):
                     con.execute("ROLLBACK")
                 raise
         return None
+
+    # ---- API の件数制限（RP_RATE_LIMIT_SHARED）
+    def count_request(self, principal: str, window: int, limit: int) -> bool:
+        key = rate_key(principal, window)
+        with closing(self.connect()) as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                row = con.execute("SELECT n FROM rate WHERE key = ?", (key,)).fetchone()
+                if row and int(row[0]) >= limit:
+                    con.execute("ROLLBACK")
+                    return False
+                con.execute(
+                    "INSERT INTO rate (key, n, expires_at) VALUES (?, 1, ?) ON CONFLICT (key) DO UPDATE SET n = n + 1",
+                    (key, window + RATE_TTL_SECONDS),
+                )
+                con.execute("COMMIT")
+            except BaseException:
+                if con.in_transaction:
+                    con.execute("ROLLBACK")
+                raise
+        return True
 
     def spent(self, day: str, owner: str) -> tuple[float, float]:
         with closing(self.connect()) as con:

@@ -15,7 +15,8 @@
 | `RP_ALLOWED_EXTENSIONS` | `.xlsx,.xlsm,.docx,.pptx,.pdf,.md,.diff,.patch` | 受け付ける拡張子 |
 | `RP_JOB_TTL_DAYS` | `30` | ジョブと結果を消すまでの日数（AWS は DynamoDB の TTL、Azure はワーカーが表の行を消す。S3・Blob はライフサイクルでも消す） |
 | `RP_PUBLIC_BASE_URL` | （空） | 結果の URL を通知に載せるときの基準 URL. MCP はこの Host 以外からの要求を断る（DNS リバインディング対策） |
-| `RP_RATE_LIMIT_PER_MINUTE` | `30` | 1 人が 1 分間に送れる件数（API と MCP の POST）. 1 台ごとの数え方. 数えるための記録は、最後の POST から 60 秒過ぎた利用者のものを消し、1 万人を超えたら最も長く使われていない利用者から消す（メモリが増え続けない） |
+| `RP_RATE_LIMIT_PER_MINUTE` | `30` | 1 人が 1 分間に送れる件数（API と MCP の POST）. 既定は 1 台ごとの数え方（`RP_RATE_LIMIT_SHARED`）. 数えるための記録は、最後の POST から 60 秒過ぎた利用者のものを消し、1 万人を超えたら最も長く使われていない利用者から消す（メモリが増え続けない） |
+| `RP_RATE_LIMIT_SHARED` | `false` | `true` で件数をジョブ表（DynamoDB・Table Storage・SQLite）で全台共有して数える（1 分ごとの区切り. 台を増やしても 1 人の上限は変わらない）. POST のたびに保存先への書き込みが 1 回増える. 保存先が失敗したときは、その回だけその台のメモリで数える（API は止めない）. 台が 1 つなら `false` のままでよい |
 
 ## 認証（API と MCP）
 

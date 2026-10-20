@@ -32,6 +32,8 @@ CHARS_PER_TOKEN = 3.0  # ASCII（英数字・記号）の何文字で 1 トー�
 MAX_DOC_CHARS = 180_000  # 約 6 万トークン. 超えた分は省き、その旨を結果に書く
 OUTPUT_TOKENS = {"standard": 4000, "verify": 3000}
 MAX_FINDINGS = 20
+MAX_VERIFY = 8  # 上位モデルで検証する MUST の件数の上限（費用を抑えるため）. 超えた分は「未検証」と明記する
+UNVERIFIED_NOTE = "未検証: 上位モデルの検証は MUST の先頭 {n} 件まで（この指摘は一次レビューのまま）"
 
 
 @dataclass
@@ -180,7 +182,8 @@ class DocumentReviewer:
         musts = [f for f in found if f.severity == "MUST"]
         if musts and self.deep:
             vsys = _prompt("design-verify.md", 3)
-            vuser = user + "\n\n## 一次レビューの指摘（データ）\n\n" + wrap_findings(musts[:8])
+            targets, skipped = musts[:MAX_VERIFY], musts[MAX_VERIFY:]
+            vuser = user + "\n\n## 一次レビューの指摘（データ）\n\n" + wrap_findings(targets)
             if out.cost_usd + _estimate(self.deep, vsys + vuser, OUTPUT_TOKENS["verify"]) > self.budget:
                 out.notes.append(f"予算 ${self.budget:.2f} を超える見込みのため、上位モデルの検証を省きました")
             else:
@@ -198,6 +201,10 @@ class DocumentReviewer:
                         out.notes.append(f"上位モデルの検証の出力を読めなかったため、一次の結果だけを出します（{e}）")
                         out.findings = ordered(found)
                         return out
+                    if skipped:
+                        # 先頭 MAX_VERIFY 件だけを検証した. 残りを黙って「検証済み」に見せない（指摘ごとと結果の注記の両方に残す）
+                        for f in skipped:
+                            f.verdict_note = " / ".join(x for x in (UNVERIFIED_NOTE.format(n=MAX_VERIFY), f.verdict_note) if x)
                     apply_verdicts(found, _normalize_verdicts(verdicts), self.deep)
                     found = merge(found, extra)
                     if extra_unknown:
@@ -206,7 +213,12 @@ class DocumentReviewer:
                         # 検証の判定で印が消えないよう、却下されなかったものには付け直す
                         if f.id in unknown and f.status != "rejected" and "要確認" not in f.verdict_note:
                             f.verdict_note = " / ".join(x for x in (UNKNOWN_SEVERITY_NOTE.format(raw=unknown[f.id]), f.verdict_note) if x)
-                    out.notes.append(f"MUST {len(musts[:8])} 件を上位モデルで検証しました")
+                    if skipped:
+                        out.notes.append(
+                            f"MUST {len(musts)} 件のうち先頭 {len(targets)} 件を上位モデルで検証しました（残り {len(skipped)} 件は未検証. 指摘に「未検証」と付けています）"
+                        )
+                    else:
+                        out.notes.append(f"MUST {len(targets)} 件を上位モデルで検証しました")
         out.findings = ordered(found)
         return out
 

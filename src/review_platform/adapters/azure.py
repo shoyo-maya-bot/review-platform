@@ -19,10 +19,11 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 from azure.storage.queue import QueueClient
 
 from ..domain import Job, JobStatus
-from ..ports import SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
+from ..ports import RATE_TTL_SECONDS, SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
 
 PARTITION = "job"
 SPEND_PARTITION = "spend"
+RATE_PARTITION = "rate"
 
 
 def _credential():
@@ -153,13 +154,36 @@ class AzureJobRepository:
                 break
             self.t.delete_entity(PARTITION, r["RowKey"])
             n += 1
-        old = self.t.query_entities("PartitionKey eq @p and expires_at lt @n", parameters={"p": SPEND_PARTITION, "n": now_epoch}, select=["RowKey"])
-        for i, r in enumerate(old):
-            if i >= limit:
-                break
-            with contextlib.suppress(ResourceNotFoundError):
-                self.t.delete_entity(SPEND_PARTITION, r["RowKey"])
+        for part in (SPEND_PARTITION, RATE_PARTITION):
+            old = self.t.query_entities("PartitionKey eq @p and expires_at lt @n", parameters={"p": part, "n": now_epoch}, select=["RowKey"])
+            for i, r in enumerate(old):
+                if i >= limit:
+                    break
+                with contextlib.suppress(ResourceNotFoundError):
+                    self.t.delete_entity(part, r["RowKey"])
         return n
+
+    def count_request(self, principal: str, window: int, limit: int, attempts: int = 10) -> bool:
+        """件数の行（PartitionKey=rate）に、上限未満のときだけ 1 足す（ETag の楽観的な同時実行制御. 同時に更新されたら読み直す）."""
+        row = f"{window}|{spend_scope(principal)}"  # RowKey に # は使えない（費用の行と同じく | で区切る）
+        for _ in range(attempts):
+            try:
+                cur = self.t.get_entity(RATE_PARTITION, row)
+            except ResourceNotFoundError:
+                try:
+                    self.t.create_entity({"PartitionKey": RATE_PARTITION, "RowKey": row, "n": 1, "expires_at": window + RATE_TTL_SECONDS})
+                    return True
+                except ResourceExistsError:
+                    continue  # 別の台が先に作った. 読み直して数える
+            if int(cur.get("n", 0)) >= limit:
+                return False
+            cur["n"] = int(cur.get("n", 0)) + 1
+            try:
+                self.t.update_entity(cur, mode=UpdateMode.REPLACE, etag=cur.metadata["etag"], match_condition=MatchConditions.IfNotModified)
+                return True
+            except ResourceModifiedError:
+                continue
+        raise Conflict(f"rate {row}")
 
     def add_spend(self, day: str, owner: str, usd: float, attempts: int = 10) -> None:
         for scope in (SPEND_ALL, spend_scope(owner)):

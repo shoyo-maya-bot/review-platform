@@ -11,7 +11,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from ..domain import Job, JobStatus
-from ..ports import SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, spend_expires_at, spend_scope
+from ..ports import RATE_TTL_SECONDS, SPEND_ALL, SPEND_OWNER, SPEND_TOTAL, Conflict, NotFound, QueueMessage, rate_key, spend_expires_at, spend_scope
 
 OWNER_INDEX = "owner-job-index"  # infra/aws の DynamoDB と同じ名前
 _RETRY = Config(retries={"max_attempts": 5, "mode": "standard"}, connect_timeout=5, read_timeout=30)
@@ -197,6 +197,23 @@ class DynamoJobRepository:
                 # 別のワーカーの予約と同時だった. 少し待って同じ条件でやり直す（条件は足した後の額で見るので、やり直しても超えない）
                 time.sleep(0.05 * (attempt + 1))
         return None
+
+    def count_request(self, principal: str, window: int, limit: int) -> bool:
+        """件数の記録（job_id = `rate#<区切り>#<利用者のハッシュ>`. owner を持たないので一覧の GSI には出ない. TTL で消える）に、
+        上限未満のときだけ 1 足す（UpdateItem の条件付き ADD）."""
+        try:
+            self.ddb.update_item(
+                TableName=self.table,
+                Key={"job_id": {"S": f"rate#{rate_key(principal, window)}"}},
+                UpdateExpression="ADD n :one SET expires_at = :e",
+                ConditionExpression="attribute_not_exists(n) OR n < :limit",
+                ExpressionAttributeValues={":one": {"N": "1"}, ":limit": {"N": str(limit)}, ":e": {"N": str(window + RATE_TTL_SECONDS)}},
+            )
+        except ClientError as e:
+            if _code(e) == "ConditionalCheckFailedException":
+                return False
+            raise
+        return True
 
     def spent(self, day: str, owner: str) -> tuple[float, float]:
         out = []
