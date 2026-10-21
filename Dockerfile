@@ -19,6 +19,9 @@ RUN pip install -c constraints.txt ".[aws,azure]" && pip uninstall -y pip
 # （pyproject.toml の tools と同じ SHA にする. tests/test_pins.py が確かめる）. 依存の版は、同じ SHA の doc-to-markdown の constraints.txt でそろえる
 ARG DOC2MD_REF=a10ad8737ccb6bac6271ef67cef4d9c9ff0edfce
 ADD https://raw.githubusercontent.com/shoyo-maya-bot/doc-to-markdown/${DOC2MD_REF}/constraints.txt /tmp/doc2md-constraints.txt
+# DOC2MD_REF の constraints.txt が pillow 12 を固定している間は、修正版（13.0.0）に置き換える（12.3.0 の脆弱性. 2026-10-21 公開）.
+# pillow 12 の行だけを置き換えるので、DOC2MD_REF を pillow 13 以上の版に上げれば何もしない（その時にこの行を消してよい）
+RUN sed -i -E 's/^pillow==12\.[^ ;]*/pillow==13.0.0/' /tmp/doc2md-constraints.txt
 RUN python -m venv /opt/doc2md \
     && /opt/doc2md/bin/pip install -c /tmp/doc2md-constraints.txt "doc-to-markdown @ git+https://github.com/shoyo-maya-bot/doc-to-markdown.git@${DOC2MD_REF}" \
     && /opt/doc2md/bin/pip uninstall -y pip \
