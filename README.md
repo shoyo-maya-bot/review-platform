@@ -168,8 +168,10 @@ CI は Linux（Python 3.11・3.12・3.14. イメージは 3.14）と Windows（3
 
 ## 変更点
 
+- **doc-to-markdown（`tools`・イメージの `DOC2MD_REF`）を 28ee561 に上げた**（2026-10-22）. 28ee561 は Python 3.11 以上が必須（このパッケージと同じ）で、
+  constraints.txt が pillow 13.0.0 を固定しているので、Dockerfile で pillow 12 を 13.0.0 に置き換える行（10-22 の #15）は消した. devtools-common の固定は 04f3915 のまま
 - **イメージの doc2md（`/opt/doc2md`）の pillow を 13.0.0 に上げた**（2026-10-22. 12.3.0 の脆弱性、CRITICAL を含む 8 件への対応）.
-  `DOC2MD_REF` の constraints.txt が pillow 12 を固定している間は、Dockerfile で 13.0.0 に置き換える（doc-to-markdown 側を上げたら不要）
+  当時の `DOC2MD_REF` の constraints.txt が pillow 12 を固定していたため Dockerfile で置き換えていた（上の 28ee561 への更新で不要になり、消した）
 - **auto-review を agent-lab 08e9689 に、devtools-common を 04f3915 に、doc-to-markdown（`tools`・イメージの `DOC2MD_REF`）を a10ad87 に上げた**（2026-10-21）.
   3 つとも devtools-common 04f3915 にそろったので、ローカルの `pip install -e ".[tools]"` が同じ venv にまた入るようになった（10-19 の「doc2md は別の venv に入れる」は不要.
   別の venv に入れている人はそのままでも動く）. イメージは引き続き doc2md を別の venv（`/opt/doc2md`）に入れる

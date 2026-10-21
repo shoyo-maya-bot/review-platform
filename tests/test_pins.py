@@ -85,24 +85,11 @@ def test_installed_libraries_pin_the_same_devtools_common():
         pytest.skip("auto-review・doc-to-markdown が入っていない")
 
 
-def test_docker_doc2md_pillow_is_patched():
-    """イメージの doc2md の venv には、脆弱性のある pillow 12 を入れない（DOC2MD_REF の constraints が 12 でも 13.0.0 に置き換える）.
+def test_docker_doc2md_constraints_are_used_as_is():
+    """イメージの doc2md は、DOC2MD_REF の constraints.txt をそのまま使う（書き換えない）.
 
-    Dockerfile の sed を、doc-to-markdown の constraints.txt と同じ形の行に当てて確かめる. 13 以上の行は変えない.
+    DOC2MD_REF（28ee561 以降）の constraints は pillow 13.0.0 を固定しているので、#15 の pillow 12 → 13.0.0 の置き換えは消した.
     """
-    import shutil
-    import subprocess
-
-    import pytest
-
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    m = re.search(r"^RUN sed -i -E '([^']+)' /tmp/doc2md-constraints\.txt$", text, re.M)
-    assert m, "Dockerfile に doc2md の constraints の pillow を置き換える sed がありません"
-    assert text.index(m.group(0)) < text.index("/opt/doc2md/bin/pip install"), "置き換えは doc2md を入れる前に行う"
-    if shutil.which("sed") is None:
-        pytest.skip("sed が無い")
-    src = "lxml==6.1.0\npillow==12.3.0\npillow-heif==1.0\npdfplumber==0.11.10\n"
-    out = subprocess.run(["sed", "-E", m.group(1)], input=src, capture_output=True, text=True, check=True).stdout
-    assert out == src.replace("pillow==12.3.0", "pillow==13.0.0")
-    newer = "pillow==13.1.0\n"
-    assert subprocess.run(["sed", "-E", m.group(1)], input=newer, capture_output=True, text=True, check=True).stdout == newer
+    assert not re.search(r"^RUN sed [^\n]*/tmp/doc2md-constraints\.txt", text, re.M), "doc2md の constraints を書き換えない"
+    assert "pillow==12" not in text
