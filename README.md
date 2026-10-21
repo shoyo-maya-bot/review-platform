@@ -53,7 +53,7 @@ Excel・Word などの変換には doc2md が要るので、まず Markdown の�
 ```powershell
 git clone https://github.com/shoyo-maya-bot/review-platform.git; cd review-platform
 py -3.12 -m venv .venv; .\.venv\Scripts\Activate.ps1
-pip install -e .                      # 変換も試すなら、doc2md を別の venv に入れて PATH に置く（下の注）
+pip install -e .                      # Excel・Word なども変換して試すなら pip install -e ".[tools]"（doc2md も入る）
 review-platform token                 # トークンと SHA-256 が表示される
 $env:RP_API_TOKENS_SHA256 = "<表示された SHA-256>"; $env:RP_LLM = "fake"
 review-platform api                   # 1 つ目の PowerShell（http://127.0.0.1:8080）
@@ -72,8 +72,7 @@ review-platform submit samples\member-api-design.md --wait
 review-platform submit samples\change.diff --wait
 ```
 
-注: Excel・Word なども試すときは、doc2md（doc-to-markdown）を **別の venv** に入れて `doc2md` を PATH に置きます（このパッケージと devtools-common の固定 SHA が違い、同じ venv には入らないため。
-版は `pyproject.toml` の `tools` と同じ SHA にします）。例: `py -3.12 -m venv .doc2md; .\.doc2md\Scripts\pip install "doc-to-markdown @ git+https://github.com/shoyo-maya-bot/doc-to-markdown.git@<tools と同じ SHA>"` の後、`$env:PATH = "$PWD\.doc2md\Scripts;$env:PATH"`。
+注: Excel・Word なども試すときは、`pip install -e ".[tools]"` で doc2md（doc-to-markdown）も同じ venv に入れます（版は `pyproject.toml` の `tools` の SHA）。
 
 本物の AI でレビューするときは、`.env` を `RP_LLM=anthropic` と `ANTHROPIC_API_KEY=...` にし、費用の上限 `RP_BUDGET_PER_JOB_USD`（1 件）・`RP_BUDGET_DAILY_USD`（1 日の全体）・`RP_BUDGET_DAILY_PER_OWNER_USD`（1 日の利用者ごと）を**すべて 0 より大きい値に**設定して起動し直します（費用がかかります）。上限の既定は 0 で、0 のままだと有料の LLM は一切呼びません（[CONFIG.md](docs/CONFIG.md)）。既定の疑似 LLM（`RP_LLM=fake`）は無料なので、上限 0 のままで動きます。
 AWS・Azure の実装をローカルで試すときは、`--profile aws`（moto サーバー）か `--profile azure`（Azurite）で起動します。
@@ -169,6 +168,9 @@ CI は Linux（Python 3.11・3.12・3.14. イメージは 3.14）と Windows（3
 
 ## 変更点
 
+- **auto-review を agent-lab 08e9689 に、devtools-common を 04f3915 に、doc-to-markdown（`tools`・イメージの `DOC2MD_REF`）を a10ad87 に上げた**（2026-10-21）.
+  3 つとも devtools-common 04f3915 にそろったので、ローカルの `pip install -e ".[tools]"` が同じ venv にまた入るようになった（10-19 の「doc2md は別の venv に入れる」は不要.
+  別の venv に入れている人はそのままでも動く）. イメージは引き続き doc2md を別の venv（`/opt/doc2md`）に入れる
 - **ワーカーが落ちた後の再配信で試行回数を失わない**（2026-10-19）. これまではジョブの貸し出し期限がメッセージの見えない時間と同じ長さで、心拍もメッセージを先に延ばしていたため、
   落ちた後に再配信されたメッセージがまだ貸し出し中のジョブに当たって見送られ、受信回数を 1 回むだにした（`MAX_ATTEMPTS` = 3 が実質 2 回）. いまは貸し出し期限を見えない時間より 60 秒短くし、
   心拍はジョブの期限を先に延ばしてからメッセージを延ばす. 落ちた後の引き継ぎも、これまでより 60 秒早い

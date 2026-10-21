@@ -78,4 +78,4 @@ Messages API・Bedrock では、そのスキーマを入力にした道具を強
 - ローカルの実装（SQLite）は 1 台の PC で API とワーカーを動かす前提。本番の負荷には向かない
 - 利用者ごとの一覧は、Azure（Table Storage）では表を絞り込む方式で、件数が多いと遅くなる（多くなったら索引用の行を足す）
 - 変換は doc2md の範囲（方眼紙の Excel・画像の中の文字などは苦手）。LibreOffice・Tesseract はイメージに入れていない（大きくなるため）
-- doc2md はイメージの中の別の venv（`/opt/doc2md`。版は Dockerfile の `DOC2MD_REF`）に入れ、別プロセスで呼ぶ。doc-to-markdown と auto-review が固定している devtools-common の版が違っても、ぶつからないようにするため。ローカルで設計書を変換するときも、doc-to-markdown は別の venv に入れて `doc2md` を PATH に置く（doc-to-markdown 5a1e16c と auto-review 7711246 が固定している devtools-common の SHA が違い、同じ venv には入らないため。版は `tools` と `DOC2MD_REF` で同じ SHA にし、tests/test_pins.py が確かめる）
+- doc2md はイメージの中の別の venv（`/opt/doc2md`。版は Dockerfile の `DOC2MD_REF`）に入れ、別プロセスで呼ぶ。doc-to-markdown と auto-review が固定している devtools-common の版が違っても、ぶつからないようにするため。ローカルで設計書を変換するときは `pip install -e ".[tools]"` で同じ venv に入れる（doc-to-markdown a10ad87 と auto-review 08e9689 が固定している devtools-common はどちらも 04f3915。版は `tools` と `DOC2MD_REF` で同じ SHA にし、tests/test_pins.py が確かめる）

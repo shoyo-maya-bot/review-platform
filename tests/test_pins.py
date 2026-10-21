@@ -49,3 +49,37 @@ def test_docker_pip_installs_use_constraints():
     assert "COPY pyproject.toml README.md LICENSE constraints.txt" in text
     m = re.search(r"^ADD https://raw\.githubusercontent\.com/shoyo-maya-bot/doc-to-markdown/\$\{DOC2MD_REF\}/constraints\.txt ", text, re.M)
     assert m, "doc2md の constraints は DOC2MD_REF と同じ SHA から取る"
+
+
+def _requires_devtools_common_sha(dist: str) -> str | None:
+    """入っている dist が要求する devtools-common の SHA（入っていなければ None）."""
+    from importlib import metadata
+
+    try:
+        reqs = metadata.requires(dist) or []
+    except metadata.PackageNotFoundError:
+        return None
+    for r in reqs:
+        if r.lower().startswith("devtools-common") and "git+" in r:
+            return _sha(r, "devtools-common")
+    return None
+
+
+def test_installed_libraries_pin_the_same_devtools_common():
+    """auto-review と（入っていれば）tools の doc-to-markdown が固定している devtools-common は、本体と同じ SHA.
+
+    違うと pip install -e ".[tools]" が解決できない（同じ venv に入らない）. 入っていない dist は確かめない.
+    """
+    import pytest
+
+    deps = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
+    (ours,) = [_sha(d, "devtools-common") for d in deps if "devtools-common.git@" in d]
+    checked = 0
+    for dist in ("auto-review", "doc-to-markdown"):
+        sha = _requires_devtools_common_sha(dist)
+        if sha is None:
+            continue
+        checked += 1
+        assert sha == ours, f"{dist} は devtools-common {sha[:7]} を固定（本体は {ours[:7]}）"
+    if not checked:
+        pytest.skip("auto-review・doc-to-markdown が入っていない")
