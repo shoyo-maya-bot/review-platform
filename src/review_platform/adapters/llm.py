@@ -55,12 +55,38 @@ def _result_text(content: list[dict], schema: dict | None) -> str:
 
 
 class LLMError(RuntimeError):
-    """LLM の呼び出しの失敗. cost_usd は、失敗しても窓口が課金した分（出力が max_tokens で切れたときなど）. 費用の集計に足す."""
+    """LLM の呼び出しの失敗. cost_usd は、失敗しても窓口が課金した分（出力が max_tokens で切れたときなど）. 費用の集計に足す.
 
-    def __init__(self, message: str, retryable: bool = False, cost_usd: float = 0.0):
+    maybe_billed は、課金されたかもしれないが額が分からない失敗（5xx・タイムアウト・接続の切断など. 窓口が処理した後に
+    失敗したかもしれない）. 費用を少なく数えないよう、ワーカーは呼ぶ前の見積もり額（出力は上限いっぱい）で数える.
+    送る前の失敗・窓口が処理せずに断った失敗（400・401・403・404・413・429 など）は False.
+    """
+
+    def __init__(self, message: str, retryable: bool = False, cost_usd: float = 0.0, maybe_billed: bool = False):
         super().__init__(message)
         self.retryable = retryable
         self.cost_usd = cost_usd
+        self.maybe_billed = maybe_billed
+
+
+def status_maybe_billed(status: int) -> bool:
+    """HTTP の状態から、課金されたかもしれないか. 4xx（408 を除く）は窓口が処理せずに断ったものとみなす. それ以外は安全側に True."""
+    return not (400 <= status < 500 and status != 408)
+
+
+# Bedrock のエラーのうち、モデルが処理せずに断ったもの（課金されない）. ほかは安全側に「課金されたかもしれない」とみなす
+BEDROCK_NOT_BILLED = frozenset(
+    {
+        "ThrottlingException",
+        "ValidationException",
+        "AccessDeniedException",
+        "ResourceNotFoundException",
+        "ServiceQuotaExceededException",
+        "ModelNotReadyException",
+        "UnrecognizedClientException",
+        "ExpiredTokenException",
+    }
+)
 
 
 def canonical_model(model: str) -> str:
@@ -193,11 +219,15 @@ class AnthropicLLM:
                 cost_usd=_usage_cost(model, c.usage, c.cost_usd),
             ) from e
         except dc.APIStatusError as e:
-            raise LLMError(f"LLM の API が {e.status} を返しました: {_safe(str(e))}", retryable=e.status in RETRYABLE_STATUS) from e
-        except dc.APIConnectionError as e:
-            raise LLMError(f"LLM の API に繰り返し失敗しました: {_safe(str(e))}", retryable=True) from e
+            raise LLMError(
+                f"LLM の API が {e.status} を返しました: {_safe(str(e))}",
+                retryable=e.status in RETRYABLE_STATUS,
+                maybe_billed=status_maybe_billed(e.status),
+            ) from e
+        except dc.APIConnectionError as e:  # タイムアウト・切断は、窓口が処理を終えた後かもしれない
+            raise LLMError(f"LLM の API に繰り返し失敗しました: {_safe(str(e))}", retryable=True, maybe_billed=True) from e
         except dc.LLMError as e:
-            raise LLMError(f"LLM の呼び出しに失敗しました: {_safe(str(e))}") from e
+            raise LLMError(f"LLM の呼び出しに失敗しました: {_safe(str(e))}", maybe_billed=True) from e
         u = comp.usage
         tin = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
         price = _usage_cost(model, u, comp.cost_usd)
@@ -236,7 +266,11 @@ class BedrockLLM:
             res = self.client.invoke_model(modelId=model, body=json.dumps(body), contentType="application/json", accept="application/json")
         except ClientError as e:
             code = str(e.response.get("Error", {}).get("Code", ""))
-            raise LLMError(f"Bedrock の呼び出しに失敗しました: {code}", retryable=code in ("ThrottlingException", "ServiceUnavailableException", "ModelNotReadyException")) from e
+            raise LLMError(
+                f"Bedrock の呼び出しに失敗しました: {code}",
+                retryable=code in ("ThrottlingException", "ServiceUnavailableException", "ModelNotReadyException"),
+                maybe_billed=code not in BEDROCK_NOT_BILLED,
+            ) from e
         request_id = str((res.get("ResponseMetadata") or {}).get("RequestId") or "")
         return _reply(model, json.loads(res["body"].read()), request_id, int((time.monotonic() - t0) * 1000), schema)
 

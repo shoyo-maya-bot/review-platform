@@ -4,12 +4,12 @@
 
 ## 何のリポジトリか
 
-設計書（Markdown）とコードの差分を AI でレビューする仕組みです。API・ワーカー・CLI と、AWS / Azure に置くための Terraform があります。
+設計書（Excel・Word・PowerPoint・PDF・Markdown）とコードの差分を AI でレビューする仕組みです。API・ワーカー・CLI と、AWS / Azure に置くための Terraform があります。
 
 ## 試験とリント
 
 ```bash
-pip install -e ".[aws,azure,dev]"
+pip install -c constraints.txt -e ".[aws,azure,dev]"   # 版は constraints.txt で固定（README の「開発」と同じ）
 ruff check . && ruff format --check .
 pytest -q                 # CI はカバレッジ 85% 以上が必要（--cov=review_platform --cov-fail-under=85）
 ```

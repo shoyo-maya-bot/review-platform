@@ -40,28 +40,28 @@
 
 ### aws
 
-| 変数 | 意味 |
-|---|---|
-| `AWS_REGION` | リージョン（なければ `AWS_DEFAULT_REGION`） |
-| `RP_S3_BUCKET` | 原本と結果を置くバケット |
-| `RP_SQS_QUEUE_URL` | ジョブのキュー（デッドレターキューは Terraform 側で設定） |
-| `RP_DDB_TABLE` | ジョブの表（パーティションキー `job_id`（文字列）、TTL 属性 `expires_at`（UNIX 秒）、GSI `owner-job-index`（パーティションキー `owner`・ソートキー `job_id`、射影 ALL）。GSI は利用者ごとの一覧に使う。日次の費用の集計も同じ表に `job_id = spend#<日付>#<範囲>` の項目で置く（ワーカーに `UpdateItem` が要る）。名前はアプリと Terraform で合わせる） |
-| `RP_AWS_ENDPOINT_URL` | （任意）moto サーバーなどのエミュレーターに向けるときだけ（docker compose の `--profile aws` で使う）。S3・SQS・DynamoDB に効く。Bedrock には効かない。クラウドでは使わない |
+| 変数 | 既定 | 意味 |
+|---|---|---|
+| `AWS_REGION` | （空） | リージョン（なければ `AWS_DEFAULT_REGION`） |
+| `RP_S3_BUCKET` | （空） | 原本と結果を置くバケット（`RP_BACKEND=aws` では必須） |
+| `RP_SQS_QUEUE_URL` | （空） | ジョブのキュー（デッドレターキューは Terraform 側で設定. `RP_BACKEND=aws` では必須） |
+| `RP_DDB_TABLE` | （空） | ジョブの表（パーティションキー `job_id`（文字列）、TTL 属性 `expires_at`（UNIX 秒）、GSI `owner-job-index`（パーティションキー `owner`・ソートキー `job_id`、射影 ALL）。GSI は利用者ごとの一覧に使う。日次の費用の集計も同じ表に `job_id = spend#<日付>#<範囲>` の項目で置く（ワーカーに `UpdateItem` が要る）。名前はアプリと Terraform で合わせる. `RP_BACKEND=aws` では必須） |
+| `RP_AWS_ENDPOINT_URL` | （空） | （任意）moto サーバーなどのエミュレーターに向けるときだけ（docker compose の `--profile aws` で使う）。S3・SQS・DynamoDB に効く。Bedrock には効かない。クラウドでは使わない |
 
 認証は実行ロール（ECS のタスクロール）。アクセスキーは使いません。
 
 ### azure
 
-| 変数 | 意味 |
-|---|---|
-| `RP_AZURE_BLOB_URL` | `https://<account>.blob.core.windows.net` |
-| `RP_AZURE_QUEUE_URL` | `https://<account>.queue.core.windows.net` |
-| `RP_AZURE_TABLE_URL` | `https://<account>.table.core.windows.net` |
-| `RP_AZURE_CONTAINER` | 原本と結果を置くコンテナ（既定 `review`） |
-| `RP_AZURE_QUEUE_NAME` | ジョブのキュー（Storage Queue、既定 `jobs`）。何度も失敗したメッセージは `<キュー名>-poison` に移す |
-| `RP_AZURE_TABLE_NAME` | ジョブの表（Table Storage、既定 `jobs`） |
-| `AZURE_CLIENT_ID` | ユーザー割り当てマネージド ID のクライアント ID（アプリの設定ではなく、Azure SDK の `DefaultAzureCredential` が読む） |
-| `RP_AZURE_CONNECTION_STRING` | （任意）Azurite に向けるときだけ。クラウドでは使わない |
+| 変数 | 既定 | 意味 |
+|---|---|---|
+| `RP_AZURE_BLOB_URL` | （空） | `https://<account>.blob.core.windows.net` |
+| `RP_AZURE_QUEUE_URL` | （空） | `https://<account>.queue.core.windows.net` |
+| `RP_AZURE_TABLE_URL` | （空） | `https://<account>.table.core.windows.net` |
+| `RP_AZURE_CONTAINER` | `review` | 原本と結果を置くコンテナ |
+| `RP_AZURE_QUEUE_NAME` | `jobs` | ジョブのキュー（Storage Queue）。何度も失敗したメッセージは `<キュー名>-poison` に移す |
+| `RP_AZURE_TABLE_NAME` | `jobs` | ジョブの表（Table Storage） |
+| `AZURE_CLIENT_ID` | （空） | ユーザー割り当てマネージド ID のクライアント ID（アプリの設定ではなく、Azure SDK の `DefaultAzureCredential` が読む） |
+| `RP_AZURE_CONNECTION_STRING` | （空） | （任意）Azurite に向けるときだけ。クラウドでは使わない |
 
 認証はマネージド ID（`DefaultAzureCredential`）。
 
@@ -75,13 +75,19 @@
 | `RP_LLM_MODEL_STANDARD` | `claude-sonnet-5-5` | ふだんのレビューのモデル。Bedrock では推論プロファイル ID |
 | `RP_LLM_MODEL_DEEP` | `claude-opus-5-5` | 検証に使う上位モデル。空なら検証しない |
 | `RP_BUDGET_PER_JOB_USD` | `0` | 1 ジョブの費用の上限. **`0`（既定）なら有料の LLM（`anthropic`・`bedrock`）は一切呼ばない**（下の注を参照）. やり直しをまたいで足し上げる（見積もりで超えそうなら上位モデルを省き、ふだんのレビューも超えるなら呼ばずに failed. 設計書・差分のどちらも、最初の呼び出しの前に見積もりで確かめる） |
-| `RP_BUDGET_DAILY_USD` | `0` | 1 日（UTC）の LLM 費用の上限（全体）. **`0`（既定）なら有料の LLM は呼ばない**（上限なしではない）. ジョブ表と同じ共有の保存先（SQLite・DynamoDB・Table Storage）で集計するので、ワーカーが何台でも効く. LLM を 1 回呼ぶごとに、呼ぶ前に見積もり額（伏せ字の後の入力 + 出力は上限いっぱい）を集計に**予約**し（条件付き更新: SQLite は書き込みトランザクション、DynamoDB は `TransactWriteItems` の条件、Table Storage は同じパーティションの ETag 付きトランザクション. 複数のワーカーが同時に呼んでも上限を超えない）、呼んだ後に実額との差を精算する（精算は予約した日の集計に対して行う. 呼び出しの最中に UTC の日付が変わっても、次の日の集計はずれない）. 予約できなければ LLM を呼ばずに failed（検証段なら一次の結果を残す）. 1 ジョブで使える予算は、1 ジョブの上限の残りと日次の上限の残りの小さい方. 呼び出し中は予約額が集計に入っているので、同時に動くジョブが多いと上限の手前で断ることがある（安全側） |
+| `RP_BUDGET_DAILY_USD` | `0` | 1 日（UTC）の LLM 費用の上限（全体）. **`0`（既定）なら有料の LLM は呼ばない**（上限なしではない）. ジョブ表と同じ共有の保存先（SQLite・DynamoDB・Table Storage）で集計するので、ワーカーが何台でも効く. LLM を 1 回呼ぶごとに、呼ぶ前に見積もり額（伏せ字の後の入力 + 出力は上限いっぱい）を集計に**予約**し（条件付き更新: SQLite は書き込みトランザクション、DynamoDB は `TransactWriteItems` の条件、Table Storage は同じパーティションの ETag 付きトランザクション. 複数のワーカーが同時に呼んでも上限を超えない）、呼んだ後に実額との差を精算する（課金されたかもしれないが額の分からない失敗（5xx・タイムアウトなど）は、予約を戻さず見積もり額のまま数える. 精算は予約した日の集計に対して行う. 呼び出しの最中に UTC の日付が変わっても、次の日の集計はずれない）. 予約できなければ LLM を呼ばずに failed（検証段なら一次の結果を残す）. 1 ジョブで使える予算は、1 ジョブの上限の残りと日次の上限の残りの小さい方. 呼び出し中は予約額が集計に入っているので、同時に動くジョブが多いと上限の手前で断ることがある（安全側） |
 | `RP_BUDGET_DAILY_PER_OWNER_USD` | `0` | 1 日（UTC）の LLM 費用の上限（利用者ごと）. **`0`（既定）なら有料の LLM は呼ばない**. 扱いは `RP_BUDGET_DAILY_USD` と同じ |
 | `RP_MASK_PII` | `1` | `1`（既定）なら、LLM に送る前に設計書・差分・プロンプトの中のメールアドレスと電話番号（日本の形式。全角・区切りなし・`+81` を含む）を `＊＊＊` に置き換える（`devtools_common.llm.Masker`）。`anthropic`・`bedrock`・`fake` のすべてに効く。`0` で止める（メールアドレスの検査そのものをレビューしたいときなど）。詳しくは [SECURITY.md](SECURITY.md) |
 
 費用の上限（`RP_BUDGET_*`）は 0 以上の有限の数値です（`inf`・`nan`・負の値は設定の誤りで起動しない）. 既定はすべて `0` で、`0` は「上限なし」ではなく **「有料の LLM を一切呼ばない」** です（従量課金を勝手に使わないため）.
 `RP_LLM=anthropic`・`bedrock` で AI レビューをするときは、3 つの上限を**すべて 0 より大きい値に明示的に設定**してください. 1 つでも `0` のままなら、ジョブは LLM を呼ばずに failed（理由に `0` の変数名を出す）になり、ワーカーの起動時にも警告をログに出します.
 疑似 LLM（`RP_LLM=fake`. 費用 0）と `none` は上限 `0` のままでも動きます（`fake` で上限を明示すると、`fake` が返す見積もりの費用で上限の動きを試せます）.
+
+## CLI（送る側）
+
+| 変数 | 既定 | 意味 |
+|---|---|---|
+| `RP_TOKEN` | （空） | `review-platform submit` のトークン（`--token` を省いたとき）. サーバーには置かない（サーバーは `RP_API_TOKENS_SHA256` の SHA-256 だけを持つ） |
 
 ## 通知
 
