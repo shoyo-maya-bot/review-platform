@@ -34,7 +34,7 @@ flowchart LR
 
 ## すぐ試す（ローカル、5 分）
 
-前提: Docker（Rancher Desktop など）と Python 3.11 以上。LLM は既定で `fake`（決まった返事）なので、API キーなしで一通り動きます。
+前提: Docker（Rancher Desktop など）と Python 3.11 以上。この手順の LLM は `fake`（決まった返事。`.env.example` と compose の既定）なので、API キーなしで一通り動きます（アプリそのものの `RP_LLM` の既定は `none` = AI レビューをしない。[CONFIG.md](docs/CONFIG.md#llm)）。
 
 ```bash
 git clone https://github.com/shoyo-maya-bot/review-platform.git && cd review-platform
@@ -74,7 +74,7 @@ review-platform submit samples\change.diff --wait
 
 注: Excel・Word なども試すときは、`pip install -e ".[tools]"` で doc2md（doc-to-markdown）も同じ venv に入れます（版は `pyproject.toml` の `tools` の SHA）。
 
-本物の AI でレビューするときは、`.env` を `RP_LLM=anthropic` と `ANTHROPIC_API_KEY=...` にし、費用の上限 `RP_BUDGET_PER_JOB_USD`（1 件）・`RP_BUDGET_DAILY_USD`（1 日の全体）・`RP_BUDGET_DAILY_PER_OWNER_USD`（1 日の利用者ごと）を**すべて 0 より大きい値に**設定して起動し直します（費用がかかります）。上限の既定は 0 で、0 のままだと有料の LLM は一切呼びません（[CONFIG.md](docs/CONFIG.md)）。既定の疑似 LLM（`RP_LLM=fake`）は無料なので、上限 0 のままで動きます。
+本物の AI でレビューするときは、`.env` を `RP_LLM=anthropic` と `ANTHROPIC_API_KEY=...` にし、費用の上限 `RP_BUDGET_PER_JOB_USD`（1 件）・`RP_BUDGET_DAILY_USD`（1 日の全体）・`RP_BUDGET_DAILY_PER_OWNER_USD`（1 日の利用者ごと）を**すべて 0 より大きい値に**設定して起動し直します（費用がかかります）。上限の既定は 0 で、0 のままだと有料の LLM は一切呼びません（[CONFIG.md](docs/CONFIG.md)）。疑似 LLM（`RP_LLM=fake`）は無料なので、上限 0 のままで動きます。
 AWS・Azure の実装をローカルで試すときは、`--profile aws`（moto サーバー）か `--profile azure`（Azurite）で起動します。
 
 ### submit の終了コード
@@ -168,45 +168,12 @@ CI は Linux（Python 3.11・3.12・3.14. イメージは 3.14）と Windows（3
 
 ## 変更点
 
-- **doc-to-markdown（`tools`・イメージの `DOC2MD_REF`）を 28ee561 に上げた**（2026-10-22）. 28ee561 は Python 3.11 以上が必須（このパッケージと同じ）で、
-  constraints.txt が pillow 13.0.0 を固定しているので、Dockerfile で pillow 12 を 13.0.0 に置き換える行（10-22 の #15）は消した. devtools-common の固定は 04f3915 のまま
-- **イメージの doc2md（`/opt/doc2md`）の pillow を 13.0.0 に上げた**（2026-10-22. 12.3.0 の脆弱性、CRITICAL を含む 8 件への対応）.
-  当時の `DOC2MD_REF` の constraints.txt が pillow 12 を固定していたため Dockerfile で置き換えていた（上の 28ee561 への更新で不要になり、消した）
-- **auto-review を agent-lab 08e9689 に、devtools-common を 04f3915 に、doc-to-markdown（`tools`・イメージの `DOC2MD_REF`）を a10ad87 に上げた**（2026-10-21）.
-  3 つとも devtools-common 04f3915 にそろったので、ローカルの `pip install -e ".[tools]"` が同じ venv にまた入るようになった（10-19 の「doc2md は別の venv に入れる」は不要.
-  別の venv に入れている人はそのままでも動く）. イメージは引き続き doc2md を別の venv（`/opt/doc2md`）に入れる
-- **ワーカーが落ちた後の再配信で試行回数を失わない**（2026-10-19）. これまではジョブの貸し出し期限がメッセージの見えない時間と同じ長さで、心拍もメッセージを先に延ばしていたため、
-  落ちた後に再配信されたメッセージがまだ貸し出し中のジョブに当たって見送られ、受信回数を 1 回むだにした（`MAX_ATTEMPTS` = 3 が実質 2 回）. いまは貸し出し期限を見えない時間より 60 秒短くし、
-  心拍はジョブの期限を先に延ばしてからメッセージを延ばす. 落ちた後の引き継ぎも、これまでより 60 秒早い
-- **件数制限を全台で共有できる `RP_RATE_LIMIT_SHARED`**（2026-10-19. 既定は `false` で、これまでどおり台ごとのメモリで数える）. `true` にするとジョブ表（DynamoDB・Table Storage・SQLite）で
-  1 分ごとの区切りで数える（台を増やしても 1 人の上限は変わらない. POST のたびに保存先への書き込みが 1 回増える. 保存先が失敗したときはその台のメモリで数える）
-- **設計書の MUST が 9 件以上のとき、上位モデルで検証しなかった指摘を明記する**（2026-10-19）. 検証するのは費用を抑えるため先頭 8 件まで（これまでどおり）. 残りの指摘に「未検証」を付け、
-  結果の注記に「MUST N 件のうち先頭 8 件を検証（残り M 件は未検証）」と書く（これまでは「MUST 8 件を検証しました」だけで、残りがあることが分からなかった）
-- **auto-review を agent-lab 7711246 に、devtools-common を d17be43 に上げた**（2026-10-19）. devtools-common は auto-review（7711246）が固定している SHA にそろえた
-  （d17be43 は devtools-common の main 04f3915 のマージ元で、中身は同じ. 違う SHA にすると pip・uv が解決できない）. auto-review: 課金後の出力の読み取り失敗でも PR の累計の費用を数える、
-  既定の伏せ字で API キー・トークンらしい文字列も伏せる、など. devtools-common: ログ・エラー出力の伏せ字の強化. ローカルの `pip install -e ".[tools]"`（doc-to-markdown 5a1e16c）は
-  devtools-common の固定が違うため、同じ venv には入らなくなった（イメージは別の venv なので影響なし. doc2md は別の venv に入れる）
+最近の要点です。**全件（2026-10-07 以降）は [CHANGELOG.md](CHANGELOG.md)** にあります。
 
-- **`submit --wait` の終了コードに `6`・`7` を足した**（2026-10-09）. 受け付けた後に状態・結果を聞く通信が一時的に失敗しても、これまでは 1 回で `3`（やり直せば通る）になり、
-  スクリプトが送り直すと二重のジョブ・二重の費用になった. いまは間隔を延ばして再試行し、それでも駄目なら job_id を出して `6`（状態不明. 送り直さない）.
-  長すぎる文書の先頭だけをレビューした成功は `0` ではなく `7`（結果の Markdown に「範囲: 一部だけ」、summary に `partial: true`）. `0` だけを成功とみなすスクリプトは `7` の扱いを決める
-- **料金表に無いモデルは料金表の最大の単価で見積もる**（2026-10-09. これまでは (4, 20) で、表の 5/25・15/75 より安く数えていた）. Bedrock の application-inference-profile の ARN のように
-  ID からモデルが分からないときに当たる. モデルごとに 1 回、警告をログに出す. 単価の正しい見積もりが要るなら、推論プロファイル ID かモデル ID を指定する
-- **数値の設定は有限の値だけ**（2026-10-09）. `RP_BUDGET_*` などに `inf`・`nan` を入れると、これまでは予算の確認が効かなくなった. いまは設定の誤り
-- **結果の Markdown の Markdown のリンク・画像は文字だけを残す**（2026-10-09）. AI の出力に混ざったインライン・参照形式のリンクと画像を開かせない・読み込ませない
-- **auto-review を agent-lab d4bc1c9 に上げた**（2026-10-08）. 文書（`*.md`・`docs/**`）だけの差分でも、秘密情報らしき値（`password=` など）があれば AI レビューを省かない（費用がかかることがある. 予算の確認は通常どおり）.
-  上位モデルの段の出力が読めないときは、一次の結果を注記付きで返す（これまでと同じ）. review-platform はラベルを渡さないので、`review:standard` の固定は効かない（`tests/test_diff_auto_review_contract.py`）
-- **`submit --wait` の終了コードを分けた**（2026-10-08）. これまでは「未解決の MUST あり」「送れなかった」「時間切れ」「ジョブの失敗」がどれも `1` だった.
-  いまは MUST ありだけが `1` で、送れなかったは `2`・`3`、時間切れは `4`、ジョブの失敗は `5`（[submit の終了コード](#submit-の終了コード)）. `1` で判定しているスクリプトは見直す
-- **ALB のアイドルタイムアウトの既定を 300 秒に**（2026-10-08. 下限 150 秒）. MCP の `get_job` は最大 120 秒待つので、既定の 120 秒では待っている間に切れることがあった. アプリの keep-alive は `RP_KEEP_ALIVE_SECONDS`（AWS は ALB + 5 秒）
-- **doc2md の壊れた入力（終了コード 2）**は再試行せずに失敗にし、理由（stderr の要点. 一時フォルダのパスを外し、メールアドレス・電話番号を伏せる）をジョブの `error` に残す（2026-10-08）
-- **AI の出力をスキーマで検証する**（2026-10-07）. 壊れた JSON（末尾のカンマなど）・`findings` という語を含むだけの文章・形の違う JSON
-  （題名や重要度の無い指摘を含む）は、これまで「指摘 0 件の成功」になることがあったが、いまはジョブを **失敗**（「AI の出力を読めませんでした」）にする.
-  上位モデルの検証の出力が読めないときは、一次の結果を「未検証」として出し、注記を残す
-- **LLM の窓口（`ports.LLMClient.complete`）に `schema` 引数を足した**. Messages API・Bedrock は道具の強制で構造化出力にする. 独自の窓口を実装している場合は `schema=None` を受けるようにする
-- **重要度の読み替え**は auto-review の表（`auto_review.findings.SEVERITY_ALIASES`）だけを使う. これまで review-platform だけの表で「読めない」としていた `P0`〜`P3` などは、auto-review と同じく読み替える
-- **トークンの見積もり**: 日本語など ASCII 以外は 1 文字 1 トークンで数える（これまでは 3 文字で 1 トークン）. 日本語の長い文書は、予算の確認で止まりやすくなる
-- **doc2md の子プロセス**には、決まった環境変数（PATH・HOME・TEMP・LANG・DEVTOOLS_* など）だけを渡す. API キーなどは渡さない
+- **課金されたかもしれない失敗（5xx・タイムアウトなど）は、日次の予約を戻さず見積もり額で数える**（2026-10-23）. 費用を少なく数えない側に変えた. ジョブの費用・日次の集計が実額より大きく出ることがある
+- **結果の Markdown の生の URL・`www.` を `hxxps://evil[.]example` の形にする**（2026-10-23）. 自動リンクにならない
+- **doc-to-markdown を 28ee561 に、auto-review を agent-lab 08e9689 に、devtools-common を 04f3915 に上げた**（2026-10-21〜22）. ローカルの `pip install -e ".[tools]"` は同じ venv に入る
+- **`submit --wait` の終了コードは 0〜7**（2026-10-08・09）. `1` は未解決の MUST だけ、`6` は状態不明（送り直さない）、`7` は一部だけをレビュー（[submit の終了コード](#submit-の終了コード)）
 
 ## セキュリティ・ライセンス
 

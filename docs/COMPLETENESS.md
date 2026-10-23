@@ -29,7 +29,8 @@
 | 依存の更新 | Dependabot（pip・Actions・Docker・Terraform） | — |
 | Actions の取り違え | すべてコミット SHA で固定 | — |
 | 秘密情報の混入 | gitleaks ですべてのコミットを調べる（除外は `.gitleaks.toml` に理由つき） | 秘密情報の混入検査 |
-| ドキュメントのリンク切れ | `tests/test_docs.py`（README と docs/ の相対リンクと見出し） | test |
+| ドキュメントのリンク切れ | `tests/test_docs.py`（README・CHANGELOG・AGENTS と docs/ の相対リンクと見出し） | test |
+| ドキュメントと実際の動きのずれ | `tests/test_docs_match_code.py`（CONFIG.md の環境変数と既定値・README の対応 Python・CI の版・submit の終了コード・README の変更点の長さ） | test |
 | Terraform のプロバイダーの版 | lock ファイルを `terraform-lock` ワークフローが作ってコミット. `validate` は lock どおりに入れる | terraform-lock・terraform |
 | 性能の目安（受付の応答時間・ワーカーの処理速度） | `scripts/bench_local.py`（100 件、LLM は fake）. 合否は付けず Job Summary に記録 | test (Linux, 3.12) |
 
