@@ -85,9 +85,31 @@ def strip_links(s: str) -> str:
     return s
 
 
+# 生の URL（`https://…`・`http://…`・`ftp://…`）と `www.…`. GFM・チャットの表示は書式が無くてもリンクにする（自動リンク）
+_BARE_URL = re.compile(r"(?i)\b(?:(?:https?|ftp)://|www\.)[^\s<>\"'`]*")
+
+
+def _defang(m: re.Match[str]) -> str:
+    """`https://evil.example/x` → `hxxps://evil[.]example/x`、`www.evil.example` → `www[.]evil[.]example`.
+    読めるが、自動リンクにならない（スキームを崩し、ホスト名の . を [.] にする）."""
+    url = m.group(0)
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        scheme, rest = "", url
+    elif scheme.lower().startswith("http"):
+        scheme = scheme[0] + "xx" + scheme[3:]
+    host, slash, path = rest.partition("/")
+    return scheme + sep + host.replace(".", "[.]") + slash + path
+
+
+def defang_urls(s: str) -> str:
+    """生の URL と www. を、自動リンクにならない形にする（外の URL を開かせない）."""
+    return _BARE_URL.sub(_defang, s)
+
+
 def clean(s: str, limit: int = 2000) -> str:
-    """表のセルに入れる文字列を無害化する（HTML・リンク・画像・メンション・表の区切り・改行）."""
-    s = strip_links((s or "")[:limit])
+    """表のセルに入れる文字列を無害化する（HTML・リンク・画像・生の URL・メンション・表の区切り・改行）."""
+    s = defang_urls(strip_links((s or "")[:limit]))
     s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     # 残った角かっこも文字として出す（別の場所の参照定義 `[名前]: URL` とつながってリンクにならないように）
     s = s.replace("[", "\\[").replace("]", "\\]")
