@@ -4,7 +4,7 @@ review-platform api                  API と MCP を起動
 review-platform worker [--once]      ワーカーを起動
 review-platform token                API トークンを作る（トークンと、サーバーに置く SHA-256 を表示）
 review-platform check-config --role api|worker
-review-platform submit FILE --url URL [--token T] [--wait]   ファイルを送って結果を表示
+review-platform submit FILE [--url URL] [--token T] [--wait]   ファイルを送って結果を表示（--url の既定 http://127.0.0.1:8080）
 
 submit の終了コード: 0 成功（--wait なら未解決の MUST なし）/ 1 未解決の MUST あり / 2 送れなかった（引数・ファイル・認証・入力の誤り）/
 3 送れなかった（通信・サーバーの誤り）/ 4 時間切れ（--timeout）/ 5 ジョブが失敗した /
@@ -230,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("api").set_defaults(fn=cmd_api)
     w = sub.add_parser("worker")
     w.add_argument("--once", action="store_true", help="1 件だけ処理して終わる（試験用）")
-    w.add_argument("--wait", type=int, default=10)
+    w.add_argument("--wait", type=int, default=10, help="--once のとき、キューを待つ秒数（既定 10. --once なしでは使わない）")
     w.set_defaults(fn=cmd_worker)
     sub.add_parser("token").set_defaults(fn=cmd_token)
     c = sub.add_parser("check-config")
@@ -238,7 +238,7 @@ def main(argv: list[str] | None = None) -> int:
     c.set_defaults(fn=cmd_check)
     sm = sub.add_parser("submit")
     sm.add_argument("file")
-    sm.add_argument("--url", default="http://127.0.0.1:8080")
+    sm.add_argument("--url", default="http://127.0.0.1:8080", help="API の URL（既定 http://127.0.0.1:8080）")
     sm.add_argument("--token", help="省略時は環境変数 RP_TOKEN")
     sm.add_argument("--title")
     sm.add_argument("--wait", action="store_true", help="結果まで待って表示する（終了コードは上の一覧）")

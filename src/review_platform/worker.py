@@ -10,7 +10,8 @@
   （fake で上限を明示したときは、fake が返す見積もりの費用で上限を試せる）
 - 1 日（UTC）の費用の上限（全体・利用者ごと）を、共有の保存先（ジョブ表）の集計で確かめる. 使える予算は
   「1 ジョブの上限の残り」と「日次の上限の残り」の小さい方. 日次の上限に達していれば LLM を呼ばずに失敗にする
-- 失敗した呼び出し（出力が max_tokens で切れた、など）の費用も、ジョブと日次の集計に足す
+- 失敗した呼び出し（出力が max_tokens で切れた、など）の費用も、ジョブと日次の集計に足す. 課金されたかもしれないが額の
+  分からない失敗（5xx・タイムアウト・接続の切断など. LLMError.maybe_billed）は、見積もり額（出力は上限いっぱい）で数える
 - 日次の上限があるときは、LLM を 1 回呼ぶごとに、呼ぶ前に見積もり額（出力は上限いっぱい）を共有の集計に予約する（条件付き更新.
   複数のワーカーが同時に呼んでも上限を超えない）. 呼んだ後に実額との差を精算する. 予約できなければ呼ばずに失敗にする
 - SIGTERM を受けたら、処理中のジョブを終えてから止まる
@@ -94,14 +95,30 @@ class _CostMeter:
         try:
             r = self.llm.complete(model, system, user, max_tokens, schema=schema)
         except Exception as e:
-            # 失敗しても課金された分（出力が max_tokens で切れた、など. LLMError.cost_usd）を数える
+            # 失敗しても課金された分（出力が max_tokens で切れた、など. LLMError.cost_usd）を数える.
+            # 課金されたかもしれないが額の分からない失敗（5xx・タイムアウトなど）は、予約を 0 に戻さず、見積もり額
+            # （出力は上限いっぱい）で数える（費用を少なく数えない）
             used = float(getattr(e, "cost_usd", 0.0) or 0.0)
+            if self._maybe_billed(e):
+                estimate = held or self.estimate(model, system, user, max_tokens)
+                if estimate > used:
+                    log.warning("llm call failed and may have been billed; counting the estimate", extra={"cost_usd": estimate, "error": type(e).__name__})
+                    used = estimate
             self.spent += used
             self._settle(day, used, held)
             raise
         self.spent += r.cost_usd
         self._settle(day, r.cost_usd, held)
         return r
+
+    def _maybe_billed(self, e: Exception) -> bool:
+        """課金されたかもしれない失敗か. LLMError はその判断（maybe_billed）に従う. 想定外の例外（botocore の読み取りの
+        タイムアウトなど）は、有料の LLM なら安全側に True."""
+        from .adapters.llm import LLMError
+
+        if isinstance(e, LLMError):
+            return e.maybe_billed
+        return self.name in PAID_LLMS
 
     def _settle(self, day: str, used: float, held: float) -> None:
         """日次の集計を実額にそろえる（予約していれば差額を足す. 負もありうる）. 集計の失敗でジョブを失敗・やり直しにしない

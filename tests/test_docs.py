@@ -22,7 +22,7 @@ def _anchors(md: Path) -> set[str]:
 
 def test_relative_links_resolve():
     broken = []
-    for md in [ROOT / "README.md", ROOT / "AGENTS.md", *sorted((ROOT / "docs").glob("*.md"))]:
+    for md in [ROOT / "README.md", ROOT / "CHANGELOG.md", ROOT / "AGENTS.md", *sorted((ROOT / "docs").glob("*.md"))]:
         text = FENCE.sub("", md.read_text(encoding="utf-8"))
         for target in LINK.findall(text):
             if re.match(r"^[a-z]+:", target) or target.startswith("mailto:"):
