@@ -7,6 +7,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -52,9 +53,10 @@ def test_cli_submit_and_worker_once(server, settings, monkeypatch, tmp_path, cap
     assert r["status"] == "succeeded"
     doc2 = tmp_path / "b.md"
     doc2.write_text("# b", encoding="utf-8")
-    monkeypatch.setattr("time.sleep", lambda s: None)
+    clock = [0.0]  # CLI の時計だけを進める（サーバー側の時計には触らない）
+    monkeypatch.setattr(cli, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
     # --wait は結果まで待つ. ワーカーが居ないので終わらず、時間切れの 4（未解決の MUST の 1 と区別する）
-    assert cli.main(["submit", str(doc2), "--url", server, "--token", TOKEN, "--wait", "--timeout", "0"]) == cli.EXIT_TIMEOUT
+    assert cli.main(["submit", str(doc2), "--url", server, "--token", TOKEN, "--wait", "--timeout", "10"]) == cli.EXIT_TIMEOUT
     assert cli.main(["submit", str(doc2), "--url", server, "--token", "wrong"]) == cli.EXIT_REQUEST
 
 
