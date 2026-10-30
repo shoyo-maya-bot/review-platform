@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -56,10 +58,12 @@ def test_wait_exit_codes(api, tmp_path, capsys, final, want):
         assert "doc2md: 入力の誤り" in err
 
 
-def test_wait_timeout_is_distinct_from_must(api, tmp_path, capsys):
+def test_wait_timeout_is_distinct_from_must(api, tmp_path, capsys, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(cli, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=lambda s: clock.__setitem__(0, clock[0] + s)))
     api[("POST", "/v1/jobs")] = httpx.Response(202, json=JOB)
     api[("GET", "/v1/jobs/j1")] = httpx.Response(200, json={"job_id": "j1", "status": "running"})
-    assert _run(tmp_path, "--wait", "--timeout", "0") == cli.EXIT_TIMEOUT
+    assert _run(tmp_path, "--wait", "--timeout", "10") == cli.EXIT_TIMEOUT
     assert "j1" in capsys.readouterr().err
 
 

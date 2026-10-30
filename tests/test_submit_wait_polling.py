@@ -87,7 +87,7 @@ def test_permanent_poll_error_is_not_retried(api, tmp_path, capsys):
 
 
 def test_initial_submit_failure_is_still_3(api, tmp_path):
-    """受け付ける前の失敗は、送り直してよい（ジョブはできていない）."""
+    """POST の失敗は 3 のまま（5xx はジョブができていることがあるので、送り直す前に確かめるよう表示する. test_submit_post_ambiguity.py）."""
     api[("POST", "/v1/jobs")] = [httpx.Response(503, json={"error": "unavailable", "message": "混んでいます"})]
     assert _run(tmp_path) == cli.EXIT_SERVER
 

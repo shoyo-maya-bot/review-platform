@@ -91,3 +91,20 @@ def test_readme_changelog_stays_short_and_links_the_full_log():
     assert "[CHANGELOG.md](CHANGELOG.md)" in section
     assert len(re.findall(r"^- ", section, re.M)) <= 6
     assert read("CHANGELOG.md").startswith("# 変更点")
+
+
+def test_readme_submit_options_match_parser():
+    """README の「submit のオプション」の表と、submit の引数（既定値を含む）が同じ."""
+    parser = cli.build_parser()
+    sub = next(a for a in parser._actions if a.dest == "cmd")  # noqa: SLF001
+    submit = sub.choices["submit"]
+    flags = {a.option_strings[0]: a.default for a in submit._actions if a.option_strings and a.option_strings[0] != "-h"}  # noqa: SLF001
+    text = read("README.md")
+    section = text[text.index("### submit のオプション") : text.index("### submit の終了コード")]
+    rows = dict(re.findall(r"^\|\s*`(--[a-z-]+)`\s*\|\s*([^|]*?)\s*\|", section, re.M))
+    assert set(rows) == set(flags)
+    for flag, default in flags.items():
+        if isinstance(default, (str, int)) and not isinstance(default, bool):
+            assert rows[flag] == f"`{default}`", flag
+    assert f"timeout={60}" in read("src/review_platform/cli.py") and "1 回の通信の時間切れは 60 秒" in section
+    assert f"最大 {cli.POLL_RETRIES} 回再試行" in section and f"{cli.POLL_INTERVAL:.0f} 秒ごと" in section
